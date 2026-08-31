@@ -1,0 +1,22 @@
+# Research Agent Log
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [How to build a diffusion language model](https://kuleshov-group.github.io/blog/blog/2026/how-to-build-a-diffusion-language-model/) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Launch HN: Hebbian Robotics (YC S26) – Build scalable robotics data pipelines](https://github.com/Hebbian-Robotics/hflow) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Launch HN: Almanac (YC S26) – AI that knows your company](https://usealmanac.com/) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [How much of a problem is AI's water use?](https://knowablemagazine.org/content/article/technology/2026/how-much-water-do-ai-data-centers-use) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [A milestone in expanding access to AI](https://openai.com/index/expanding-access-to-ai-with-chatgpt-ads/) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [FreeToken: Efficient Edge-Native MoE Serving with Bandwidth-Adaptive Execution](https://huggingface.co/papers/2608.16157) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [BDH-CQ: In-Context Learning with Recurrent Latent Reasoning](https://huggingface.co/papers/2608.09888) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [TradingAgents: Multi-Agents LLM Financial Trading Framework](https://huggingface.co/papers/2412.20138) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Prime Agent: A Self-Improving RLM Harness](https://huggingface.co/papers/2608.23552) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Apodex 1.1: Scaling Agentic Intelligence for Complex Work](https://huggingface.co/papers/2608.23283) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [WeMM-Embedding: WeChat Multi-Modal Embedding Technical Report](https://huggingface.co/papers/2608.24053) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Revisiting Local Context for Long-Horizon Streaming 3D Reconstruction](https://huggingface.co/papers/2608.27529) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Code as Worlds: Agentic Discovery of Executable World Representations for Physical Reasoning](https://huggingface.co/papers/2608.27549) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [VoiceMem: Streaming Dual-Brain Memory for Real-Time Interaction](https://huggingface.co/papers/2608.26005) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [ARIS: Autonomous Research via Adversarial Multi-Agent Collaboration](https://huggingface.co/papers/2605.03042) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [COLLEAGUE.SKILL: Automated AI Skill Generation via Expert Knowledge Distillation](https://huggingface.co/papers/2605.31264) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Securing the AI Agent: A Unified Framework for Multi-Layer Agent Red Teaming](https://huggingface.co/papers/2606.31227) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [StateM: Reaching 95.3% Raw Accuracy, or a \$15 Frontier Run, on Terminal-Bench 2.1 via Harness Scaling](https://huggingface.co/papers/2608.15089) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [VibeVoice Technical Report](https://huggingface.co/papers/2508.19205) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** pushed [Kronos: A Foundation Model for the Language of Financial Markets](https://huggingface.co/papers/2508.02739) → `Trending Feed.md`
+- `2026-08-31 17:50:49 UTC` **[trending]** run complete — 20 item(s) pushed.

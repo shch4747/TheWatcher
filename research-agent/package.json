@@ -1,0 +1,21 @@
+{
+  "name": "lapis-research-agent",
+  "version": "1.0.0",
+  "description": "Finds trending/relevant research papers for the club's active projects and writes a digest into the Lapis vault.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "fast-xml-parser": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
