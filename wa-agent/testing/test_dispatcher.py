@@ -1,3 +1,7 @@
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ^ allows running from the testing/ subfolder; imports resolve to the wa-agent package
+
 """
 Tests for the Dispatchers. Run: python test_dispatcher.py
 """

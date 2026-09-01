@@ -10,16 +10,17 @@ before gowa / Lapis / an LLM key exist.
 Three jobs, all flowing through one place:
 
 1. **Chat ingestion** — WhatsApp (project + TLDR/announcement groups) →
-   classified signals → written to the wiki in **two layers**:
-   - the **durable record** (Lapis is ARIES's knowledge base — history &
-     info: the research corpus, idea record, project pages, events), AND
-   - the owning agent's **input page** — a "what's new for your next run"
-     queue layered on top, which that agent reads and clears when it runs.
+   classified signals → written to the wiki (Lapis is ARIES's knowledge
+   base — history, projects, research, events — not just a buffer). Each
+   signal lands where the owning agent expects it:
+   - research topics/papers → **`WhatsApp/ResearchDigest.md`** (the exact
+     page the Research agent hashes and reacts to — writing here *is* the
+     research trigger; confirmed against `research-agent/src/config.ts`),
+   - ideas → **`Ideas/Inbox.md`** (Innovation agent's inbox),
+   - project updates → the **project's page** under `Projects/`,
+   - events / tasks / decisions → the wiki.
 
-   So a research paper found in chat becomes a permanent entry in
-   `research/` *and* a line on `research/_input.md`; an idea lands in
-   `ideas/` *and* on `innovation/_input.md`; a project update appends to the
-   project's page. Trigger order: **Project agent before Research agent**.
+   Trigger order: **Project agent before Research agent**.
 2. **Notification gateway (group-aware)** — other agents
    `enqueue_notification(...)` with a *logical* audience (`project:<ref>`,
    `announce`); the WA agent resolves it to the right group JID(s) via the
@@ -45,14 +46,14 @@ Core (deterministic, no network):
 - `memory_interface.py` — `WAMemory` + `Dispatcher` interfaces, `MockWAMemory`
   / `MockDispatcher` for tests.
 - `lapis_client.py` — client over Lapis's REST API (`manifest`, `files/*`,
-  `search`); `HttpLapisClient` (real) + `FakeLapisClient` (tests).
+  `search`); `HttpLapisClient` (real, auth via `LAPIS_BEARER_TOKEN`) +
+  `FakeLapisClient` (tests). Same env-var names the research-agent uses, so
+  one `.env` serves both.
 - `lapis_adapter.py` — **real `LapisAdapter(WAMemory)`** over Lapis. The
-  system's single wiki adapter; the other agents' methods fold in here.
-  Writes the **durable record** (`LAYOUT`: research corpus, ideas, projects,
-  events, tasks) *and* the per-agent **input queues** (`INPUT_PAGES`), with
-  `read_agent_input` / `consume_agent_input` for the consuming agents. Both
-  the folder/frontmatter convention and the input-page paths are the
-  one-place edits for the real vault schema.
+  system's single wiki adapter; the other agents' methods fold in here. Page
+  paths (`LAYOUT` + `INPUT_PAGES`) are aligned to the real vault
+  (`Projects/`, `WhatsApp/ResearchDigest.md`, …) and are the one-place edit
+  for any schema change.
 - `mdfront.py` — markdown+YAML frontmatter parse/dump.
 - `group_context.py` — `GroupContext` + `GroupRegistry`: allowlist, per-group
   cadence, project→group resolution, announce groups (config from `meta/groups.md`).
@@ -72,44 +73,72 @@ LLM + WhatsApp:
   (n-messages / x-seconds trigger), and an optional Flask receiver.
 - `run_live.py` — how it's wired for real operation.
 
-Tests / demo:
+Demo:
 - `demo.py` — full inbound+outbound flow on mocks.
-- `test_wa_agent.py` — 13 tests (preprocessing, routing, pipeline).
-- `test_gowa.py` — 11 tests (signature, webhook parsing, buffer, rate limit, reminders).
-- `test_lapis.py` — 13 tests (durable record + input queues, consume, reminder reads, notifications).
-- `test_dispatcher.py` — 6 tests (trigger records, dedup, handled, pipeline).
-- `test_group_context.py` — 8 tests (registry, cadence, per-group buffers, routing).
 
-## Run it
-
+Tests + connectivity checks live in **`testing/`** — see
+`testing/test_readme.md` for the full guide. Quick version:
 ```bash
-python demo.py             # mocks, no key, no network
-python test_wa_agent.py    # 13/13
-python test_gowa.py        # 11/11
-python test_lapis.py       # 13/13
-python test_dispatcher.py  # 6/6
-python test_group_context.py  # 8/8
+python demo.py                       # mocks, no key, no network
+python testing/test_wa_agent.py      # 13/13
+python testing/test_gowa.py          # 11/11
+python testing/test_lapis.py         # 13/13
+python testing/test_dispatcher.py    # 6/6
+python testing/test_group_context.py # 8/8
+python testing/check_lapis.py        # live Lapis connectivity (needs LAPIS_* env)
+python testing/check_gowa.py         # live WhatsApp login + group JIDs (needs gowa)
 ```
 
-Real classifier (Kimi K2.6):
-```bash
-pip install openai
-export OPENROUTER_API_KEY=...          # Windows: set OPENROUTER_API_KEY=...
-python demo.py
-```
+## Implementing / deploying the WA agent
 
-Live against WhatsApp + the real Lapis wiki (needs gowa running + paired):
+Bring the pieces up in this order — each is independently checkable.
+
+**1. Confirm the two live dependencies first** (see `testing/test_readme.md`):
+- Lapis: set `LAPIS_*` env and run `testing/check_lapis.py`.
+- WhatsApp: stand up gowa, scan the QR, run `testing/check_gowa.py`.
+
+**2. Install deps** on the host that will run the agent (the Pi/VPS):
 ```bash
 pip install flask openai
-export GOWA_BASE_URL=http://localhost:3000
-export WA_WEBHOOK_SECRET=<same secret gowa is configured with>
-export WA_ALLOWLIST=<groupJID1>,<groupJID2>
-export LAPIS_BASE_URL=https://lapis.dvenom.in
-export LAPIS_VAULT_ID=6adc07d5-b530-462f-be6d-cc399288bb78
-export LAPIS_TOKEN=<device bearer token from Lapis>
-python run_live.py         # POST target for gowa's WHATSAPP_WEBHOOK
 ```
-Omit the `LAPIS_*` vars to run against MockWAMemory (smoke-test gowa alone).
+
+**3. Set the environment** (put these in a `.env` or your process manager):
+```bash
+# WhatsApp transport
+GOWA_BASE_URL=http://localhost:3000
+GOWA_BASIC_AUTH=admin:yourpassword
+WA_WEBHOOK_SECRET=<same secret gowa is started with>
+# classifier
+OPENROUTER_API_KEY=<key>            # model defaults to moonshotai/kimi-k2.6
+# wiki (same names as research-agent)
+LAPIS_BASE_URL=https://lapis.dvenom.in
+LAPIS_VAULT_ID=6adc07d5-b530-462f-be6d-cc399288bb78
+LAPIS_BEARER_TOKEN=<device bearer token>
+# groups: either meta/groups.md in the vault, or a plain fallback list
+WA_ALLOWLIST=<groupJID1>,<groupJID2>
+```
+Omit the `LAPIS_*` vars to run against `MockWAMemory` (smoke-test gowa alone).
+
+**4. Configure the group registry** — create `meta/groups.md` in the vault
+(see `group_context.py` for the frontmatter shape): each group's JID, kind
+(`project`/`announce`), the project(s) it maps to, and its ingest cadence.
+`run_live.py` loads it automatically; without it, `WA_ALLOWLIST` is used
+with default cadence.
+
+**5. Point gowa at the receiver** and run it:
+```bash
+# gowa started with:  --webhook="http://<host>:5000/webhook" --webhook-secret="$WA_WEBHOOK_SECRET"
+python run_live.py         # serves POST /webhook on :5000
+```
+`run_live.py` auto-selects `LapisAdapter` + `QueueDispatcher` when `LAPIS_*`
+is set (else mock/logging). Per-group ingest already fires on cadence via
+`GroupBuffers`.
+
+**6. Still to add for a complete daemon:** a scheduler loop that calls
+`pipeline.flush_notifications(registry)` (send queued agent outputs) and
+`reminders.run_reminder_job(memory, default_audience="announce")` on their
+own cadences. Deploy gowa in Docker with a persistent session volume +
+restart-on-crash, and add a health check that alerts on session drop.
 
 ## gowa / WhatsApp setup notes
 
@@ -126,10 +155,10 @@ Omit the `LAPIS_*` vars to run against MockWAMemory (smoke-test gowa alone).
 
 ## What's stubbed / next
 
-- **Confirm vault schema** — `LapisAdapter` works, but its `LAYOUT` folders
-  and frontmatter field names are our convention. Confirm against the real
-  ARIES vault (folder names, event/task/project frontmatter) and the exact
-  `/manifest` JSON shape — both are one-place edits (`LAYOUT` / `list_files`).
+- **Confirm remaining vault paths** — research (`WhatsApp/ResearchDigest.md`)
+  and projects (`Projects/`) are confirmed against research-agent; events /
+  tasks / ideas paths are still our convention. Run `testing/check_lapis.py`,
+  read the printed file list, and adjust `LAYOUT` / `INPUT_PAGES` to match.
 - **`StubMediaProcessor`** — real OCR (screenshots!), vision, optional Whisper.
 - **Wire the agents to their trigger queue** — `QueueDispatcher` now drops
   trigger records in `inbox/triggers/<agent>/`; each agent (research /

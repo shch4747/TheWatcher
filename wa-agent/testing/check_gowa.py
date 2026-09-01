@@ -1,3 +1,7 @@
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ^ allows running from the testing/ subfolder; imports resolve to the wa-agent package
+
 """
 gowa / WhatsApp login check. Run this after gowa is up and you've scanned
 the QR, to confirm the session is live and to list your group JIDs (which

@@ -1,3 +1,7 @@
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ^ allows running from the testing/ subfolder; imports resolve to the wa-agent package
+
 """
 Tests for group-based context: registry resolution, per-group cadence,
 per-group buffers, and outbound routing of agent outputs to the right group.

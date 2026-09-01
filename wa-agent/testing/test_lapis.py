@@ -1,3 +1,7 @@
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ^ allows running from the testing/ subfolder; imports resolve to the wa-agent package
+
 """
 Tests for LapisAdapter against FakeLapisClient — exercises the real
 read/write/frontmatter logic with no network or token. Run:

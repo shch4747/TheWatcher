@@ -1,3 +1,7 @@
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ^ allows running from the testing/ subfolder; imports resolve to the wa-agent package
+
 """
 Lapis connectivity + permissions check. Run this FIRST, before wiring the
 agent, to confirm your token and vault id actually work.
