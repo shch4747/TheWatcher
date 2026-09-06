@@ -64,22 +64,28 @@ CLASSIFY_TOOL = {
 _SYSTEM = (
     "You extract structured signals from an ARIES (AI/ML club) WhatsApp thread. "
     "Route intent by type: research_paper (a shared paper/arxiv/link to research) -> Research Agent; "
-    "project_idea / event_idea -> Innovation Agent; project_update -> Project Agent; "
-    "event_info (a concrete event with date/venue), task, decision, announcement, question -> wiki. "
+    "project_idea / event_idea / feedback (event or project feedback) -> Innovation Agent; "
+    "project_update -> Project Agent; "
+    "event_info (a concrete event with date/venue), task, decision, announcement, question -> wiki; "
+    "mom (minutes of meeting — someone summarising what happened in a call/meeting) -> wiki; "
+    "user_ping (someone explicitly asking the bot to note/record/update something in the wiki) -> wiki. "
     "Ignore banter (type=noise). Only cite message ids that appear in the transcript; never invent one."
 )
 
 
-def classify_thread(thread: Thread) -> list[Signal]:
+def classify_thread(thread: Thread, group_context: str = "") -> list[Signal]:
     if os.environ.get("OPENROUTER_API_KEY"):
-        return _call_openrouter(thread)
+        return _call_openrouter(thread, group_context)
     return _stub_classify(thread)
 
 
-def _call_openrouter(thread: Thread) -> list[Signal]:
+def _call_openrouter(thread: Thread, group_context: str = "") -> list[Signal]:
     from openai import OpenAI
 
     client = OpenAI(base_url=BASE_URL, api_key=os.environ["OPENROUTER_API_KEY"])
+    user_content = f"Thread (group {thread.group_id}):\n{thread.as_transcript()}"
+    if group_context:
+        user_content += f"\n\n--- Recent group context ---\n{group_context}"
     resp = client.chat.completions.create(
         model=MODEL,
         max_tokens=4000,
@@ -87,7 +93,7 @@ def _call_openrouter(thread: Thread) -> list[Signal]:
         tool_choice={"type": "function", "function": {"name": "submit_signals"}},
         messages=[
             {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": f"Thread (group {thread.group_id}):\n{thread.as_transcript()}"},
+            {"role": "user", "content": user_content},
         ],
     )
     message = resp.choices[0].message
@@ -155,6 +161,14 @@ def _guess_type(text: str) -> SignalType:
         return SignalType.RESEARCH_PAPER
     if any(k in t for k in ("idea", "we should build", "propose", "what if we", "hackathon idea")):
         return SignalType.PROJECT_IDEA
+    if any(k in t for k in ("feedback", "review of", "how was the", "went well", "could improve")):
+        return SignalType.FEEDBACK
+    if any(k in t for k in ("meeting notes", "mom:", "minutes of", "meeting summary",
+                             "action items from", "call summary")):
+        return SignalType.MOM
+    if any(k in t for k in ("@bot ", "bot:", "hey bot", "watcher:", "note this",
+                             "record this", "save this", "update lapis")):
+        return SignalType.USER_PING
     if any(k in t for k in ("event", "talk", "workshop", "session on", "venue", "rsvp")):
         return SignalType.EVENT_INFO
     if any(k in t for k in ("update:", "progress", "merged", "deployed", "blocked", "shipped", "pushed")):

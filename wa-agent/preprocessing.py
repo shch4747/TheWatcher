@@ -38,6 +38,22 @@ _SIGNAL_HINTS = (
     "task", "pr ", "merge", "deploy", "bug", "fix",
 )
 
+# --- Heavy-preprocessing config for noisy groups (coordi, exes) ---
+# These are general chat groups with lots of casual chatter/spam.
+# We use stricter thresholds so only clearly actionable messages survive.
+_NOISY_NOISE_EXACT = _NOISE_EXACT | {
+    "hahaha", "lmfao", "bruh", "bro", "dude", "yea", "yeah", "yup",
+    "nah", "true", "fr", "ong", "bet", "damn", "wow", "wtf", "omg",
+    "ikr", "smh", "rip", "oof", "aight", "alr", "slay", "lit",
+    "yo", "sup", "hi", "hey", "hello", "bye", "cya", "see ya",
+    "good morning", "good night", "morning", "night", "gm guys",
+    "hii", "hiii", "hiiii", "lolol", "xd", "xD", "XD",
+    "what", "wha", "hmmmm", "hmmm", "idk", "idc", "wdym",
+    "np", "no problem", "all good", "sounds good", "agreed",
+    "right", "exactly", "ofc", "of course", "obv", "obviously",
+}
+_NOISY_MIN_KEEP_WORDS = 5  # need at least 5 words to survive in noisy groups
+
 
 # Stage 1 --------------------------------------------------------------------
 
@@ -78,7 +94,11 @@ def normalize(msg: RawMessage, media: MediaProcessor) -> NormalizedMessage | Non
     if msg.kind == MessageKind.STICKER:
         return None
     if msg.kind == MessageKind.SYSTEM:
-        return None
+        # Detect joins — don't drop those, the pipeline uses them for welcome context
+        text_lower = (msg.text or "").lower()
+        if any(k in text_lower for k in ("joined", "added", "was added")):
+            return make(f"[join] {msg.text}", needs_human_tldr=False)
+        return None  # other system messages (leaves, renames, etc.) still dropped
 
     if msg.kind == MessageKind.TEXT or msg.kind == MessageKind.LINK:
         text = (msg.text or "").strip()
@@ -116,24 +136,31 @@ def _voice_looks_important(msg: RawMessage) -> bool:
 
 # Stage 4 --------------------------------------------------------------------
 
-def is_noise(m: NormalizedMessage) -> bool:
-    """True if the message should be dropped before classification."""
+def is_noise(m: NormalizedMessage, noisy_group: bool = False) -> bool:
+    """True if the message should be dropped before classification.
+    When `noisy_group` is True (coordi/exes groups), thresholds are stricter
+    because those groups have a very high spam-to-signal ratio."""
     if m.needs_human_tldr or m.media_unresolved:
         return False  # unresolved media is a decision to keep, not noise
     t = m.text.strip().lower()
     if not t:
         return True
-    if t in _NOISE_EXACT:
+    noise_set = _NOISY_NOISE_EXACT if noisy_group else _NOISE_EXACT
+    min_words = _NOISY_MIN_KEEP_WORDS if noisy_group else _MIN_KEEP_WORDS
+    if t in noise_set:
         return True
     if any(h in t for h in _SIGNAL_HINTS):
         return False
-    if len(t.split()) < _MIN_KEEP_WORDS:
+    if len(t.split()) < min_words:
         return True
     return False
 
 
-def prefilter(messages: list[NormalizedMessage]) -> list[NormalizedMessage]:
-    return [m for m in messages if not is_noise(m)]
+def prefilter(messages: list[NormalizedMessage],
+              noisy_jids: set[str] | None = None) -> list[NormalizedMessage]:
+    noisy = noisy_jids or set()
+    return [m for m in messages
+            if not is_noise(m, noisy_group=(m.group_id in noisy))]
 
 
 # Stage 5 --------------------------------------------------------------------
@@ -176,13 +203,17 @@ def preprocess(
     allowlist: set[str],
     seen_ids: set[str],
     media: MediaProcessor | None = None,
+    noisy_jids: set[str] | None = None,
 ) -> list[Thread]:
     """Run stages 1-5 and return classifier-ready threads. Does NOT mutate
     persistent seen-state — the caller marks ids seen after a successful
-    run, so a crash mid-batch reprocesses rather than silently drops."""
+    run, so a crash mid-batch reprocesses rather than silently drops.
+
+    `noisy_jids` — JIDs of groups with high spam (coordi, exes) that get
+    stricter noise filtering to protect the LLM budget."""
     media = media or StubMediaProcessor()
     ordered = dedup_and_order(raw, seen_ids)
     in_scope = filter_groups(ordered, allowlist)
     normalized = [n for n in (normalize(m, media) for m in in_scope) if n is not None]
-    kept = prefilter(normalized)
+    kept = prefilter(normalized, noisy_jids=noisy_jids)
     return assemble_threads(kept)

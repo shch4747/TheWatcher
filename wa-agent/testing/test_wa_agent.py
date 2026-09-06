@@ -110,9 +110,14 @@ def test_routing_rule_matches_club_spec():
     assert router.route(sig(SignalType.RESEARCH_PAPER)).agent_target == AgentTarget.RESEARCH
     assert router.route(sig(SignalType.PROJECT_IDEA)).agent_target == AgentTarget.INNOVATION
     assert router.route(sig(SignalType.EVENT_IDEA)).agent_target == AgentTarget.INNOVATION
+    assert router.route(sig(SignalType.FEEDBACK)).agent_target == AgentTarget.INNOVATION
     assert router.route(sig(SignalType.PROJECT_UPDATE)).agent_target == AgentTarget.PROJECT
     assert router.route(sig(SignalType.EVENT_INFO)).wiki_method == "upsert_event"
     assert router.route(sig(SignalType.RESEARCH_PAPER)).wiki_method == "append_research_mention"
+    assert router.route(sig(SignalType.FEEDBACK)).wiki_method == "record_feedback"
+    assert router.route(sig(SignalType.MOM)).wiki_method == "write_mom"
+    assert router.route(sig(SignalType.USER_PING)).wiki_method == "write_user_ping"
+    assert router.route(sig(SignalType.MOM)).should_notify is True
 
 
 # -- end to end (stub classifier) ------------------------------------------
@@ -139,6 +144,68 @@ def test_pipeline_ingest_end_to_end():
     assert memory.is_seen("2") and not memory.is_seen("bad")
 
 
+def test_system_join_not_dropped():
+    """System messages about joins should survive preprocessing (for welcome context)."""
+    raw = [RawMessage("j1", G, "sys", 10, MessageKind.SYSTEM, "Adi joined using this group's invite link")]
+    threads = pp.preprocess(raw, {G}, set())
+    assert len(threads) == 1
+    assert threads[0].messages[0].text.startswith("[join]")
+
+
+def test_system_leave_still_dropped():
+    """Non-join system messages should still be dropped."""
+    raw = [RawMessage("l1", G, "sys", 10, MessageKind.SYSTEM, "Riya left")]
+    threads = pp.preprocess(raw, {G}, set())
+    assert len(threads) == 0
+
+
+def test_join_triggers_welcome_with_context():
+    """When someone joins and group has context, a welcome message is sent."""
+    memory, dispatcher = MockWAMemory(), MockDispatcher()
+    memory.update_group_context(G, "working on dashboard rewrite")
+    sent = []
+    pipe = WAPipeline(memory, dispatcher, allowlist={G},
+                      sender=lambda a, t: sent.append((a, t)))
+    raw = [RawMessage("j1", G, "sys", 10, MessageKind.SYSTEM, "Adi was added")]
+    pipe.ingest_batch(raw)
+    welcome_msgs = [t for a, t in sent if "Welcome" in t]
+    assert len(welcome_msgs) >= 1
+    assert "dashboard rewrite" in welcome_msgs[0]
+
+
+def test_feedback_routes_to_innovation():
+    """Feedback signal should route to Innovation agent."""
+    from llm_client import _guess_type
+    assert _guess_type("feedback: the hackathon went well but venue was too small") == SignalType.FEEDBACK
+
+
+def test_mom_classified_correctly():
+    """MoM keywords should classify as MOM signal."""
+    from llm_client import _guess_type
+    assert _guess_type("meeting notes: decided to ship v2 next week") == SignalType.MOM
+
+
+def test_user_ping_classified_correctly():
+    """User ping keywords should classify as USER_PING signal."""
+    from llm_client import _guess_type
+    assert _guess_type("@bot note this: next meetup is on Friday") == SignalType.USER_PING
+
+
+def test_group_context_passed_to_classifier():
+    """Pipeline should pass group context to the classifier."""
+    received_ctx = []
+    def mock_classifier(thread, group_context=""):
+        received_ctx.append(group_context)
+        return []
+    memory, dispatcher = MockWAMemory(), MockDispatcher()
+    memory.update_group_context(G, "discussing ML pipelines")
+    pipe = WAPipeline(memory, dispatcher, allowlist={G}, classifier=mock_classifier)
+    raw = [RawMessage("1", G, "Adi", 10, MessageKind.TEXT, "update: shipped the parser")]
+    pipe.ingest_batch(raw)
+    assert len(received_ctx) >= 1
+    assert "ML pipelines" in received_ctx[0]
+
+
 def test_seen_prevents_reprocessing():
     memory, dispatcher = MockWAMemory(), MockDispatcher()
     pipe = WAPipeline(memory, dispatcher, allowlist={G})
@@ -147,6 +214,27 @@ def test_seen_prevents_reprocessing():
     first = len(dispatcher.triggers)
     pipe.ingest_batch(raw)                 # same batch again
     assert len(dispatcher.triggers) == first   # nothing re-triggered
+
+
+def test_noisy_group_heavier_filtering():
+    """In noisy groups (coordi/exes), short casual messages are dropped even if
+    they'd survive the normal 3-word threshold."""
+    NOISY = "noisy@g.us"
+    # "yeah sounds good" is 3 words — survives normal but dropped in noisy
+    raw = [
+        RawMessage("n1", NOISY, "x", 10, MessageKind.TEXT, "yeah sounds good"),
+        RawMessage("n2", NOISY, "x", 20, MessageKind.TEXT, "update: merged the ingestion layer"),
+    ]
+    # Without noisy flag: both survive (3 words >= _MIN_KEEP_WORDS=3)
+    threads_normal = pp.preprocess(raw, {NOISY}, set(), noisy_jids=set())
+    normal_texts = [m.text for t in threads_normal for m in t.messages]
+    assert any("merged" in t for t in normal_texts)
+
+    # With noisy flag: short casual message dropped, real signal kept
+    threads_noisy = pp.preprocess(raw, {NOISY}, set(), noisy_jids={NOISY})
+    noisy_texts = [m.text for t in threads_noisy for m in t.messages]
+    assert any("merged" in t for t in noisy_texts)
+    assert not any("yeah" in t for t in noisy_texts)
 
 
 if __name__ == "__main__":

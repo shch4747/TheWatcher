@@ -88,6 +88,20 @@ class GowaClient:
             body["reply_message_id"] = reply_message_id
         return self._post("/send/message", body)
 
+    def session_status(self) -> dict:
+        """Check gowa's WhatsApp session status via GET /app/devices."""
+        try:
+            req = urllib.request.Request(
+                f"{self.base_url}/app/devices",
+                headers=self._headers(),
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode() or "{}")
+                return {"ok": True, "data": data}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def as_sender(self):
         """Return a `Sender` callable (audience, text) for WAPipeline."""
         def _sender(audience: str, text: str) -> None:

@@ -155,9 +155,61 @@ def test_notification_queue_roundtrip():
     assert len(pending) == 1 and pending[0].payload == "3 new papers"
     mem.mark_notification_sent("n1")
     assert mem.poll_pending_notifications() == []
-    # the note is retained, just marked sent
-    meta, _ = mdfront.parse(c.read_file(f"{LAYOUT['notifications']}/n1.md"))
-    assert meta["sent"] is True
+    # per-agent output file for "research" should contain the entry marked sent
+    agent_path = f"{LAYOUT['output_dir']}/research.md"
+    raw = c.read_file(agent_path)
+    assert raw is not None
+    meta, _ = mdfront.parse(raw)
+    queue = meta.get("queue", [])
+    sent_entry = [e for e in queue if e.get("id") == "n1"]
+    assert len(sent_entry) == 1 and sent_entry[0]["sent"] is True
+
+
+def test_multiple_notifications_in_single_file():
+    c, mem = _fresh()
+    mem.enqueue_notification(NotificationIntent(
+        id="n1", source_agent="research", audience=G, payload="paper found"))
+    mem.enqueue_notification(NotificationIntent(
+        id="n2", source_agent="innovation", audience=G, payload="idea evaluated"))
+    pending = mem.poll_pending_notifications()
+    assert len(pending) == 2
+    mem.mark_notification_sent("n1")
+    pending2 = mem.poll_pending_notifications()
+    assert len(pending2) == 1 and pending2[0].id == "n2"
+
+
+def test_feedback_recorded_and_forwarded_to_innovation():
+    c, mem = _fresh()
+    sig = _sig(SignalType.FEEDBACK, "hackathon was great but too short",
+               project_ref="hackathon-2026")
+    mem.record_feedback(sig)
+    # Check feedback archive
+    feedback_files = c.list_files(LAYOUT["feedback"] + "/")
+    assert len(feedback_files) == 1
+    # Check it also appended to innovation inbox
+    inbox = c.read_file(INPUT_PAGES["innovation"])
+    assert inbox is not None
+    assert "[feedback]" in inbox
+    assert "hackathon" in inbox
+
+
+def test_mom_written_to_archive():
+    c, mem = _fresh()
+    mem.write_mom(G, "Decided to ship v2 next week, assign Adi to frontend", ["m1", "m2"])
+    mom_files = c.list_files(LAYOUT["mom"] + "/")
+    assert len(mom_files) == 1
+    raw = c.read_file(mom_files[0])
+    assert "Decided to ship v2" in raw
+
+
+def test_user_ping_written_to_digest():
+    c, mem = _fresh()
+    mem.write_user_ping(G, "next meetup is on Friday 5pm", ["p1"])
+    digest_files = c.list_files(LAYOUT["channels"] + "/")
+    assert len(digest_files) >= 1
+    content = c.read_file(digest_files[0])
+    assert "[user-ping]" in content
+    assert "Friday" in content
 
 
 # -- full inbound pipeline against the real adapter -------------------------
@@ -177,6 +229,76 @@ def test_pipeline_writes_through_lapis_adapter():
     assert c.read_file(INPUT_PAGES["research"])         # research input page appended
     assert mem.is_seen("1")
     assert mem.get_group_context(G)                     # rolling context updated
+
+
+# -- per-agent output sub-paths -----------------------------------------------
+
+def test_per_agent_output_files_isolated():
+    """Each agent's notifications go to its own file, not a shared one."""
+    c, mem = _fresh()
+    mem.enqueue_notification(NotificationIntent(
+        id="r1", source_agent="research", audience=G, payload="paper found"))
+    mem.enqueue_notification(NotificationIntent(
+        id="p1", source_agent="project", audience=G, payload="task done"))
+    # Each agent gets its own file
+    research_path = f"{LAYOUT['output_dir']}/research.md"
+    project_path = f"{LAYOUT['output_dir']}/project.md"
+    assert c.read_file(research_path) is not None
+    assert c.read_file(project_path) is not None
+    # Poll returns both
+    pending = mem.poll_pending_notifications()
+    assert len(pending) == 2
+    payloads = {p.payload for p in pending}
+    assert payloads == {"paper found", "task done"}
+
+
+def test_legacy_output_file_still_read():
+    """Legacy outputmessages.md entries are still picked up by poll."""
+    c, mem = _fresh()
+    # Manually write to the legacy path
+    legacy_meta = {"type": "output-queue", "queue": [
+        {"id": "leg1", "source_agent": "wa", "audience": G,
+         "payload": "legacy msg", "sent": False, "source_ids": []}
+    ]}
+    c.write_file(LAYOUT["notifications"], mdfront.dump(legacy_meta, ""))
+    pending = mem.poll_pending_notifications()
+    assert len(pending) == 1 and pending[0].payload == "legacy msg"
+
+
+# -- reminder dedup -----------------------------------------------------------
+
+def test_reminder_dedup_window_brackets():
+    """Reminder at bracket 3 suppresses re-send until bracket drops to 1 or 0."""
+    from reminders import ReminderState, _bracket_for_days
+    state = ReminderState()  # no persistence (no memory)
+    assert state.should_send("ev1", days_until=3)
+    state.mark_sent("ev1", days_until=3)
+    # Same bracket -> suppressed
+    assert not state.should_send("ev1", days_until=3)
+    assert not state.should_send("ev1", days_until=2)
+    # Closer bracket -> allowed
+    assert state.should_send("ev1", days_until=1)
+    state.mark_sent("ev1", days_until=1)
+    assert not state.should_send("ev1", days_until=1)
+    assert state.should_send("ev1", days_until=0)
+
+
+def test_reminder_dedup_task_digest_once_per_day():
+    from reminders import ReminderState
+    state = ReminderState()
+    assert state.should_send_task_digest()
+    state.mark_task_digest_sent()
+    assert not state.should_send_task_digest()
+
+
+def test_reminder_dedup_nudge_once_per_day():
+    from reminders import ReminderState
+    state = ReminderState()
+    assert state.should_send_nudge("proj-x")
+    state.mark_nudge_sent("proj-x")
+    assert not state.should_send_nudge("proj-x")
+    # Different project still allowed
+    assert state.should_send_nudge("proj-y")
 
 
 if __name__ == "__main__":

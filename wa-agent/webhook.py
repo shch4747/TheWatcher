@@ -190,7 +190,8 @@ class GroupBuffers:
 
 # -- optional Flask receiver ------------------------------------------------
 
-def create_app(pipeline, secret: str, buffers: "GroupBuffers | None" = None, registry=None):
+def create_app(pipeline, secret: str, buffers: "GroupBuffers | None" = None,
+               registry=None, gowa_client=None, lapis_client=None):
     """Build a Flask app: POST /webhook verifies, parses, buffers per group,
     and flushes each group's batch to pipeline.ingest_batch when that group's
     trigger fires. Import Flask lazily so the package has no web dependency."""
@@ -198,6 +199,9 @@ def create_app(pipeline, secret: str, buffers: "GroupBuffers | None" = None, reg
 
     app = Flask(__name__)
     bufs = buffers or GroupBuffers(registry=registry)
+
+    # Track classification latency for /health
+    _classify_stats: dict = {"last_latency_ms": None, "last_at": None, "errors": 0}
 
     def _flush_ready():
         for batch in bufs.ready_batches():
@@ -222,5 +226,68 @@ def create_app(pipeline, secret: str, buffers: "GroupBuffers | None" = None, reg
             if buf._buf:
                 total += pipeline.ingest_batch(buf.drain()).threads
         return {"flushed_threads": total}
+
+    @app.get("/health")
+    def health():
+        """Health monitoring endpoint. Checks:
+        - gowa session status (WhatsApp Web connection)
+        - Lapis connectivity (wiki reachable?)
+        - outbound queue depth (pending notifications)
+        - inbound buffer depth (messages waiting to be processed)
+        - classification stats (last latency, error count)
+        """
+        checks: dict = {}
+        overall = True
+
+        # 1. gowa session status
+        if gowa_client:
+            gowa_status = gowa_client.session_status()
+            checks["gowa"] = gowa_status
+            if not gowa_status.get("ok"):
+                overall = False
+        else:
+            checks["gowa"] = {"ok": False, "error": "not configured"}
+            overall = False
+
+        # 2. Lapis connectivity
+        if lapis_client:
+            try:
+                reachable = lapis_client.is_reachable()
+                checks["lapis"] = {"ok": reachable}
+                if not reachable:
+                    overall = False
+            except Exception as e:
+                checks["lapis"] = {"ok": False, "error": str(e)}
+                overall = False
+        else:
+            checks["lapis"] = {"ok": False, "error": "not configured"}
+            overall = False
+
+        # 3. Outbound queue depth
+        try:
+            pending = pipeline.memory.poll_pending_notifications()
+            depth = len(pending)
+            checks["outbound_queue"] = {"depth": depth, "ok": depth < 100}
+            if depth >= 100:
+                overall = False
+        except Exception as e:
+            checks["outbound_queue"] = {"ok": False, "error": str(e)}
+
+        # 4. Inbound buffer depth
+        buffered = sum(len(b._buf) for b in bufs._buffers.values())
+        checks["inbound_buffer"] = {"depth": buffered, "groups": len(bufs._buffers)}
+
+        # 5. Classification stats
+        checks["classification"] = {
+            "last_latency_ms": _classify_stats["last_latency_ms"],
+            "last_at": _classify_stats["last_at"],
+            "errors": _classify_stats["errors"],
+        }
+
+        status_code = 200 if overall else 503
+        return {"status": "healthy" if overall else "degraded", "checks": checks}, status_code
+
+    # Expose classify stats tracker so the pipeline can update it
+    app.classify_stats = _classify_stats
 
     return app

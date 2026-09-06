@@ -54,6 +54,18 @@ class WAMemory(ABC):
     @abstractmethod
     def upsert_task(self, signal: Signal) -> None: ...
 
+    @abstractmethod
+    def record_feedback(self, signal: Signal) -> None:
+        """Record event/project feedback -> Innovation Agent's inbox."""
+
+    @abstractmethod
+    def write_mom(self, group_id: str, summary: str, source_ids: list[str]) -> None:
+        """Write minutes of meeting to the wiki."""
+
+    @abstractmethod
+    def write_user_ping(self, group_id: str, summary: str, source_ids: list[str]) -> None:
+        """Record a manual user-initiated wiki update (user pinged the bot)."""
+
     # -- reads for the reminder / task-chasing job --
     @abstractmethod
     def get_upcoming_events(self, within_days: int) -> list[dict[str, Any]]: ...
@@ -127,6 +139,15 @@ class MockWAMemory(WAMemory):
 
     def upsert_task(self, signal):
         self.writes.append(("upsert_task", signal))
+
+    def record_feedback(self, signal):
+        self.writes.append(("record_feedback", signal))
+
+    def write_mom(self, group_id, summary, source_ids):
+        self.writes.append(("write_mom", summary))
+
+    def write_user_ping(self, group_id, summary, source_ids):
+        self.writes.append(("write_user_ping", summary))
 
     def get_upcoming_events(self, within_days):
         return list(self._upcoming)

@@ -17,6 +17,9 @@ import mdfront
 DASH = "111-111@g.us"
 ML = "222-222@g.us"
 TLDR = "999-999@g.us"
+EVENTS = "444-444@g.us"
+COORDI = "555-555@g.us"
+EXES = "666-666@g.us"
 
 
 def _registry():
@@ -25,6 +28,9 @@ def _registry():
          "projects": ["dashboard"], "n_messages": 3, "max_age_s": 60},
         {"jid": ML, "name": "ML Projects", "kind": "project", "projects": ["watcher", "rag"]},
         {"jid": TLDR, "name": "ARIES TLDR", "kind": "announce", "announce": True},
+        {"jid": EVENTS, "name": "ARIES Events", "kind": "events"},
+        {"jid": COORDI, "name": "ARIES Coordi Chat", "kind": "coordi"},
+        {"jid": EXES, "name": "ARIES Exes Chat", "kind": "exes"},
     ])
 
 
@@ -32,7 +38,7 @@ def _registry():
 
 def test_allowlist_and_cadence():
     r = _registry()
-    assert r.allowlist() == {DASH, ML, TLDR}
+    assert r.allowlist() == {DASH, ML, TLDR, EVENTS, COORDI, EXES}
     assert r.cadence_for(DASH) == (3, 60)
     assert r.cadence_for("unknown@g.us") == (20, 3600.0)   # defaults
 
@@ -115,6 +121,52 @@ def test_group_context_feeds_outbound(monkeypatch=None):
         RawMessage("1", DASH, "Adi", 10, MessageKind.TEXT, "update: merged the parser"),
     ])
     assert "parser" in mem.get_group_context(DASH)
+
+
+def test_resolve_events_and_coordi():
+    r = _registry()
+    assert r.resolve("events") == [EVENTS]
+    assert r.resolve("coordi") == [COORDI]
+    assert r.resolve("faculty") == [COORDI]
+
+
+def test_events_group_properties():
+    r = _registry()
+    g = r.get(EVENTS)
+    assert g.is_events is True
+    assert g.is_announce is False
+    assert g.is_coordi is False
+
+
+def test_coordi_group_properties():
+    r = _registry()
+    g = r.get(COORDI)
+    assert g.is_coordi is True
+    assert g.is_noisy_group is True
+    assert g.is_announce is False
+    assert g.is_events is False
+
+
+def test_exes_group_properties():
+    r = _registry()
+    g = r.get(EXES)
+    assert g.is_exes is True
+    assert g.is_noisy_group is True
+    assert g.is_announce is False
+    assert g.is_coordi is False
+
+
+def test_resolve_exes():
+    r = _registry()
+    assert r.resolve("exes") == [EXES]
+    assert r.resolve("executives") == [EXES]
+
+
+def test_noisy_groups_set():
+    r = _registry()
+    noisy = r.noisy_groups()
+    assert COORDI in noisy and EXES in noisy
+    assert DASH not in noisy and TLDR not in noisy
 
 
 if __name__ == "__main__":

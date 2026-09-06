@@ -20,17 +20,21 @@ _SIGNAL_TO_WIKI: dict[SignalType, str | None] = {
     SignalType.RESEARCH_PAPER: "append_research_mention",
     SignalType.PROJECT_IDEA: "record_idea",
     SignalType.EVENT_IDEA: "record_idea",
+    SignalType.FEEDBACK: "record_feedback",
     SignalType.PROJECT_UPDATE: "append_project_update",
     SignalType.EVENT_INFO: "upsert_event",
     SignalType.TASK: "upsert_task",
     SignalType.DECISION: "write_chat_digest",
     SignalType.ANNOUNCEMENT: "write_chat_digest",
     SignalType.QUESTION: "write_chat_digest",
+    SignalType.MOM: "write_mom",
+    SignalType.USER_PING: "write_user_ping",
     SignalType.NOISE: None,
 }
 
 # Signal types worth echoing back out to WhatsApp as a notification.
-_NOTIFY_TYPES = {SignalType.EVENT_INFO, SignalType.ANNOUNCEMENT, SignalType.DECISION}
+_NOTIFY_TYPES = {SignalType.EVENT_INFO, SignalType.ANNOUNCEMENT, SignalType.DECISION,
+                 SignalType.MOM}
 
 
 def route(signal: Signal) -> RoutingDecision:

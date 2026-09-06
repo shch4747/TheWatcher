@@ -107,6 +107,9 @@ class SignalType(str, Enum):
     DECISION = "decision"                # -> wiki digest
     ANNOUNCEMENT = "announcement"        # -> wiki digest
     QUESTION = "question"                # -> wiki digest (maybe clarify)
+    FEEDBACK = "feedback"                # -> Innovation Agent (event/project feedback)
+    MOM = "mom"                          # -> wiki (minutes of meeting)
+    USER_PING = "user_ping"              # -> wiki (manual lapis update via bot)
     NOISE = "noise"                      # dropped, never routed
 
 
@@ -124,12 +127,15 @@ SIGNAL_TO_AGENT: dict[SignalType, AgentTarget] = {
     SignalType.RESEARCH_PAPER: AgentTarget.RESEARCH,
     SignalType.PROJECT_IDEA: AgentTarget.INNOVATION,
     SignalType.EVENT_IDEA: AgentTarget.INNOVATION,
+    SignalType.FEEDBACK: AgentTarget.INNOVATION,       # event/project feedback -> Innovation
     SignalType.PROJECT_UPDATE: AgentTarget.PROJECT,
     SignalType.TASK: AgentTarget.PROJECT,
     SignalType.EVENT_INFO: AgentTarget.NONE,
     SignalType.DECISION: AgentTarget.NONE,
     SignalType.ANNOUNCEMENT: AgentTarget.NONE,
     SignalType.QUESTION: AgentTarget.NONE,
+    SignalType.MOM: AgentTarget.NONE,                  # wiki-only
+    SignalType.USER_PING: AgentTarget.NONE,            # wiki-only (manual update)
     SignalType.NOISE: AgentTarget.NONE,
 }
 

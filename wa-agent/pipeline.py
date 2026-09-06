@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from schemas import (
     RawMessage, Signal, SignalType, RoutingDecision, AgentTarget, NotificationIntent,
+    MessageKind,
 )
 from memory_interface import WAMemory, Dispatcher
 from media import MediaProcessor
@@ -37,7 +38,7 @@ from llm_client import classify_thread
 # A Sender turns a finished message string + audience into an actual gowa
 # send. Injected so tests use a recorder and prod uses the gowa client.
 Sender = Callable[[str, str], None]      # (audience, text) -> None
-Classifier = Callable[[object], list[Signal]]   # Thread -> [Signal]
+Classifier = Callable[..., list[Signal]]   # (Thread, group_context=...) -> [Signal]
 
 
 @dataclass
@@ -58,6 +59,7 @@ class WAPipeline:
         sender: Optional[Sender] = None,
         media: Optional[MediaProcessor] = None,
         classifier: Classifier = classify_thread,
+        noisy_jids: set[str] | None = None,
     ):
         self.memory = memory
         self.dispatcher = dispatcher
@@ -65,17 +67,26 @@ class WAPipeline:
         self.sender = sender or (lambda audience, text: None)
         self.media = media
         self.classify = classifier
+        self.noisy_jids = noisy_jids or set()
 
     # -- inbound ---------------------------------------------------------
 
     def ingest_batch(self, raw: list[RawMessage]) -> IngestResult:
         result = IngestResult()
         seen = {m.id for m in raw if self.memory.is_seen(m.id)}
-        threads = preprocessing.preprocess(raw, self.allowlist, seen, self.media)
+        threads = preprocessing.preprocess(raw, self.allowlist, seen, self.media,
+                                           noisy_jids=self.noisy_jids)
         result.threads = len(threads)
 
         for thread in threads:
-            decisions = [router.route(s) for s in self.classify(thread)]
+            # Handle join events: send newcomers a welcome with group context
+            self._handle_joins(thread)
+
+            # Feed group context INTO classification (design: "send to LLM
+            # along with group context") so the model knows what the group
+            # has been discussing when it classifies new messages.
+            group_ctx = self.memory.get_group_context(thread.group_id)
+            decisions = [router.route(s) for s in self.classify(thread, group_context=group_ctx)]
             # WA triggers Project agent BEFORE Research agent (club order):
             # execute project-targeted decisions first, then the rest.
             decisions.sort(key=lambda d: 0 if d.agent_target == AgentTarget.PROJECT else 1)
@@ -90,6 +101,18 @@ class WAPipeline:
         self.memory.mark_seen(processed)
         result.processed_ids = processed
         return result
+
+    def _handle_joins(self, thread) -> None:
+        """When someone joins a group, send them a contextual welcome summary
+        of what the group has been discussing (agentic: group context on join)."""
+        for m in thread.messages:
+            if m.kind == MessageKind.SYSTEM and m.text.startswith("[join]"):
+                ctx = self.memory.get_group_context(thread.group_id)
+                if ctx:
+                    welcome = (
+                        f"Welcome! Here's what this group has been up to recently:\n{ctx}"
+                    )
+                    self.sender(thread.group_id, welcome)
 
     def _update_group_context(self, thread, decisions) -> None:
         """Keep a short rolling summary per group so outbound messages can be
@@ -125,6 +148,8 @@ class WAPipeline:
     def _write(self, method: str, signal: Signal) -> None:
         fn = getattr(self.memory, method)
         if method == "write_chat_digest":
+            fn(signal.group_id, signal.summary, signal.source_message_ids)
+        elif method in ("write_mom", "write_user_ping"):
             fn(signal.group_id, signal.summary, signal.source_message_ids)
         else:
             fn(signal)

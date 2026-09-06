@@ -23,7 +23,7 @@ edit it, e.g.:
     groups:
       - jid: 123-456@g.us
         name: Dashboard Team
-        kind: project           # project | announce
+        kind: project           # project | announce | events | coordi | exes
         projects: [dashboard]
         n_messages: 15
         max_age_s: 3600
@@ -31,6 +31,15 @@ edit it, e.g.:
         name: ARIES TLDR
         kind: announce
         announce: true
+      - jid: 111-222@g.us
+        name: ARIES Events
+        kind: events
+      - jid: 333-444@g.us
+        name: ARIES Coordi Chat
+        kind: coordi            # general chat, high spam — heavy preprocessing
+      - jid: 555-666@g.us
+        name: ARIES Exes Chat
+        kind: exes              # general chat, high spam — heavy preprocessing
     ---
 """
 from __future__ import annotations
@@ -49,7 +58,7 @@ GROUPS_PAGE = "meta/groups.md"
 class GroupContext:
     jid: str
     name: str = ""
-    kind: str = "project"                       # "project" | "announce"
+    kind: str = "project"                       # "project" | "announce" | "events" | "coordi" | "exes"
     projects: list[str] = field(default_factory=list)
     topics: list[str] = field(default_factory=list)
     n_messages: int = DEFAULT_N_MESSAGES
@@ -59,6 +68,28 @@ class GroupContext:
     @property
     def is_announce(self) -> bool:
         return self.announce or self.kind == "announce"
+
+    @property
+    def is_events(self) -> bool:
+        return self.kind == "events"
+
+    @property
+    def is_coordi(self) -> bool:
+        """General chat group for club coordinators — high volume of casual
+        messages / spam; needs aggressive preprocessing to extract signal."""
+        return self.kind == "coordi"
+
+    @property
+    def is_exes(self) -> bool:
+        """General chat group for club executives — same high-spam profile
+        as coordi; needs aggressive preprocessing."""
+        return self.kind == "exes"
+
+    @property
+    def is_noisy_group(self) -> bool:
+        """True for group kinds with a high spam-to-signal ratio that need
+        heavier preprocessing (coordi, exes)."""
+        return self.kind in ("coordi", "exes")
 
 
 class GroupRegistry:
@@ -101,11 +132,27 @@ class GroupRegistry:
     def announce_groups(self) -> list[str]:
         return [g.jid for g in self.groups if g.is_announce]
 
+    def events_groups(self) -> list[str]:
+        return [g.jid for g in self.groups if g.is_events]
+
+    def coordi_groups(self) -> list[str]:
+        return [g.jid for g in self.groups if g.is_coordi]
+
+    def exes_groups(self) -> list[str]:
+        return [g.jid for g in self.groups if g.is_exes]
+
+    def noisy_groups(self) -> set[str]:
+        """JIDs of all groups that need heavy preprocessing (coordi + exes)."""
+        return {g.jid for g in self.groups if g.is_noisy_group}
+
     def resolve(self, audience: str) -> list[str]:
         """Map a logical audience to concrete JIDs.
           - a JID (contains '@')          -> itself
           - 'project:<ref>' or a bare ref -> that project's group(s)
           - 'announce' / 'all' / ''       -> announcement group(s)
+          - 'events'                      -> events group(s)
+          - 'coordi'                      -> coordi group(s)
+          - 'exes' / 'executives'         -> exes group(s)
         Falls back to announcement groups when nothing else matches, so an
         output is never silently dropped."""
         if not audience:
@@ -115,5 +162,11 @@ class GroupRegistry:
         key = audience.split(":", 1)[-1] if audience.startswith("project:") else audience
         if audience in ("announce", "all", "broadcast"):
             return self.announce_groups()
+        if audience == "events":
+            return self.events_groups() or self.announce_groups()
+        if audience in ("coordi", "faculty"):
+            return self.coordi_groups() or self.announce_groups()
+        if audience in ("exes", "executives"):
+            return self.exes_groups() or self.announce_groups()
         hit = self.groups_for_project(key)
         return hit if hit else self.announce_groups()

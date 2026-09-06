@@ -52,8 +52,11 @@ LAYOUT = {
     "events": "Events",                  # convention (not yet used by other agents)
     "tasks": "Tasks",                    # convention
     "channels": "WhatsApp/digests",      # general per-group chat digests
-    "notifications": "WhatsApp/.outbox", # WA outbound queue (hidden from members)
+    "notifications": "WhatsApp/outputmessages.md",  # legacy single-file path (kept for back-compat reads)
+    "output_dir": "WhatsApp/output",                # per-agent outbound sub-paths (preferred)
     "state": "WhatsApp/.state",          # seen-ids etc (hidden)
+    "mom": "WhatsApp/MoM",              # minutes of meeting archive
+    "feedback": "WhatsApp/feedback",     # event/project feedback
 }
 
 # Per-agent input pages. INPUT_PAGES["research"] is the page the Research
@@ -251,6 +254,36 @@ class LapisAdapter(WAMemory):
         }
         self._write_note(path, meta, f"# {signal.summary}\n")
 
+    def record_feedback(self, signal: Signal) -> None:
+        """Record event/project feedback and forward to Innovation agent's inbox."""
+        # 1. Durable record in feedback archive
+        path = f"{LAYOUT['feedback']}/{_slug(signal.summary)}-{signal.id}.md"
+        meta = {
+            "type": "feedback",
+            "project": signal.project_ref or "",
+            "group": signal.group_id,
+            "added_at": _now().isoformat(),
+        }
+        self._write_note(path, meta, f"# Feedback: {signal.summary}\n")
+        # 2. Also queue on Innovation agent's input page (feedback -> Innovation)
+        ref = f" [{signal.project_ref}]" if signal.project_ref else ""
+        line = f"{_today()}:{ref} [feedback] {signal.summary}  <sub>(from {signal.group_id})</sub>"
+        self._append_to_input_page("innovation", "Ideas — inbox", line, "ideas-inbox")
+
+    def write_mom(self, group_id: str, summary: str, source_ids: list[str]) -> None:
+        """Write minutes of meeting to the wiki MoM archive."""
+        path = f"{LAYOUT['mom']}/{_slug(group_id)}/{_today()}-{_slug(summary)[:20]}.md"
+        meta = {
+            "type": "mom", "group": group_id, "date": _today(),
+            "source_ids": source_ids, "added_at": _now().isoformat(),
+        }
+        self._write_note(path, meta, f"# Meeting Notes — {_today()}\n\n{summary}\n")
+
+    def write_user_ping(self, group_id: str, summary: str, source_ids: list[str]) -> None:
+        """Record a manual wiki update requested by a user pinging the bot."""
+        # User pings go to the chat digest (they're manual notes to record)
+        self.write_chat_digest(group_id, f"[user-ping] {summary}", source_ids)
+
     # -- reads for the reminder job --------------------------------------
 
     def get_upcoming_events(self, within_days: int) -> list[dict[str, Any]]:
@@ -291,41 +324,115 @@ class LapisAdapter(WAMemory):
                         "days_stale": days, "group": meta.get("group")})
         return out
 
-    # -- outbound notification queue ------------------------------------
+    # -- outbound notification queue (per-agent sub-paths) ----------------
+    #
+    # Each agent writes to its own file: WhatsApp/output/<agent>.md
+    # The WA agent merges all files on flush. This eliminates cross-agent
+    # write contention (each agent's read-modify-write is on its own file).
+    # For backward compatibility, poll also reads the legacy single
+    # outputmessages.md file.
+
+    def _agent_output_path(self, agent: str) -> str:
+        """Per-agent output file path."""
+        return f"{LAYOUT['output_dir']}/{_slug(agent)}.md"
+
+    def _read_agent_queue(self, path: str) -> tuple[dict, list[dict]]:
+        """Read one output queue file. Returns (meta, queue_list)."""
+        raw = self.c.read_file(path)
+        if not raw:
+            return {"type": "output-queue"}, []
+        meta, _ = mdfront.parse(raw)
+        queue = meta.get("queue", [])
+        if not isinstance(queue, list):
+            queue = []
+        return meta, queue
+
+    def _write_agent_queue(self, path: str, meta: dict, queue: list[dict]) -> None:
+        """Write one agent's output queue."""
+        meta["queue"] = queue
+        self._write_note(path, meta, "# Output Messages Queue\n\nManaged by TheWatcher. Do not edit manually.\n")
 
     def enqueue_notification(self, intent: NotificationIntent) -> None:
-        path = f"{LAYOUT['notifications']}/{intent.id}.md"
-        meta = {
-            "type": "notification", "sent": False,
-            "source_agent": intent.source_agent, "audience": intent.audience,
-            "urgency": getattr(intent.urgency, "value", str(intent.urgency)),
-            "created_at": (intent.created_at or _now()).isoformat(),
-            "source_ids": intent.source_ids,
-        }
-        self._write_note(path, meta, intent.payload)
+        agent = intent.source_agent or "wa"
+        path = self._agent_output_path(agent)
+        with self._lock_for(path):
+            meta, queue = self._read_agent_queue(path)
+            queue.append({
+                "id": intent.id,
+                "source_agent": intent.source_agent,
+                "audience": intent.audience,
+                "payload": intent.payload,
+                "urgency": getattr(intent.urgency, "value", str(intent.urgency)),
+                "created_at": (intent.created_at or _now()).isoformat(),
+                "source_ids": intent.source_ids,
+                "sent": False,
+            })
+            self._write_agent_queue(path, meta, queue)
 
     def poll_pending_notifications(self) -> list[NotificationIntent]:
+        """Merge pending entries from all per-agent files + the legacy single
+        file, so nothing is lost during migration."""
         out = []
-        for path, meta, body in self._list_notes(LAYOUT["notifications"]):
-            if meta.get("sent"):
+        # 1. Read per-agent files
+        for path in self.c.list_files(LAYOUT["output_dir"] + "/"):
+            if not path.endswith(".md"):
                 continue
-            out.append(NotificationIntent(
-                id=path.rsplit("/", 1)[-1][:-3], source_agent=meta.get("source_agent", ""),
-                audience=meta.get("audience", ""), payload=body.strip(),
-                source_ids=meta.get("source_ids", []) or [],
-            ))
+            _, queue = self._read_agent_queue(path)
+            for entry in queue:
+                if entry.get("sent"):
+                    continue
+                out.append(NotificationIntent(
+                    id=entry.get("id", ""),
+                    source_agent=entry.get("source_agent", ""),
+                    audience=entry.get("audience", ""),
+                    payload=entry.get("payload", ""),
+                    source_ids=entry.get("source_ids", []) or [],
+                ))
+        # 2. Also read legacy single file (backward compat)
+        legacy = LAYOUT["notifications"]
+        raw = self.c.read_file(legacy)
+        if raw:
+            meta, _ = mdfront.parse(raw)
+            for entry in (meta.get("queue", []) or []):
+                if entry.get("sent"):
+                    continue
+                out.append(NotificationIntent(
+                    id=entry.get("id", ""),
+                    source_agent=entry.get("source_agent", ""),
+                    audience=entry.get("audience", ""),
+                    payload=entry.get("payload", ""),
+                    source_ids=entry.get("source_ids", []) or [],
+                ))
         return out
 
     def mark_notification_sent(self, intent_id: str) -> None:
-        path = f"{LAYOUT['notifications']}/{intent_id}.md"
-        with self._lock_for(path):
-            existing = self._read_note(path)
-            if not existing:
+        """Mark an entry sent in whichever file contains it (per-agent or legacy)."""
+        # Search per-agent files
+        for path in self.c.list_files(LAYOUT["output_dir"] + "/"):
+            if not path.endswith(".md"):
+                continue
+            if self._mark_sent_in(path, intent_id):
                 return
-            meta, body = existing
-            meta["sent"] = True
-            meta["sent_at"] = _now().isoformat()
-            self._write_note(path, meta, body)
+        # Fall back to legacy file
+        self._mark_sent_in(LAYOUT["notifications"], intent_id)
+
+    def _mark_sent_in(self, path: str, intent_id: str) -> bool:
+        """Try to mark intent_id as sent in the given file. Returns True if found."""
+        with self._lock_for(path):
+            meta, queue = self._read_agent_queue(path)
+            changed = False
+            for entry in queue:
+                if entry.get("id") == intent_id:
+                    entry["sent"] = True
+                    entry["sent_at"] = _now().isoformat()
+                    changed = True
+            if changed:
+                # Prune old sent items (keep last 50 for audit trail)
+                sent = [e for e in queue if e.get("sent")]
+                unsent = [e for e in queue if not e.get("sent")]
+                queue = unsent + sent[-50:]
+                self._write_agent_queue(path, meta, queue)
+            return changed
 
     # -- per-group rolling context --------------------------------------
 
