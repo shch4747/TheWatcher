@@ -64,6 +64,25 @@ class MemoryInterface(ABC):
     def get_light_research_digest(self, since: str) -> list[dict[str, Any]]:
         """Broadly-scanned (not necessarily deep-dived) research entries."""
 
+    # -- events --
+    @abstractmethod
+    def get_event_history(self) -> list[dict[str, Any]]:
+        """Past events/workshops/hackathons with attendance and feedback.
+        Any stable order is fine — the lane doesn't assume ranking."""
+
+    # -- feedback loop --
+    @abstractmethod
+    def get_recent_feedback(
+        self, lane: str, limit: int = 5, verdict: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Human up/down/neutral verdicts on past pitches from this lane,
+        most recent first. This is the up/down feedback.md loop, distinct
+        from the pursue/defer/reject outcome tracked via write_outcome —
+        that one is the club's eventual final call on a pitch; this one
+        is the faster "did this look promising" signal meant to condition
+        future generation. Empty list is a normal cold-start result, not
+        an error — callers should degrade gracefully."""
+
     # -- gate --
     @abstractmethod
     def get_pitch_history(self) -> list[dict[str, Any]]:
@@ -106,7 +125,58 @@ class MockMemory(MemoryInterface):
             {"id": "res-2", "title": "Neuroevolution for legged locomotion in cluttered terrain"},
             {"id": "res-3", "title": "Self-play curricula for negotiation agents"},
         ]
+        self._events = [
+            {
+                "id": "evt-hackathon-2025-11",
+                "title": "Overnight Hardware Hackathon",
+                "type": "hackathon",
+                "attendance": 42,
+                "feedback_score": 4.6,
+                "feedback_notes": "Highest turnout of the semester; multiple people asked for a sequel.",
+            },
+            {
+                "id": "evt-ml-talk-2025-09",
+                "title": "Intro to Diffusion Models talk",
+                "type": "talk",
+                "attendance": 11,
+                "feedback_score": 2.8,
+                "feedback_notes": "Low turnout; feedback said too theoretical, wanted a hands-on component.",
+            },
+            {
+                "id": "evt-workshop-2025-08",
+                "title": "Git & GitHub onboarding workshop",
+                "type": "workshop",
+                "attendance": 35,
+                "feedback_score": 4.1,
+                "feedback_notes": "Well-received by first-years; hasn't been repeated since new members joined this sem.",
+            },
+        ]
         self._pitch_history: list[dict[str, Any]] = []
+
+        # Deliberately seeded for only ONE lane, so testing exercises both
+        # the "has feedback" path (grounded) and the cold-start path
+        # (bridged/free/events all return []) — real state early on will
+        # look like this too, not uniformly empty or uniformly full.
+        self._feedback: dict[str, list[dict[str, Any]]] = {
+            "grounded": [
+                {
+                    "idea_id": "mock-g1",
+                    "lane": "grounded",
+                    "idea_summary": "Shared OAuth edge-case test harness for CI",
+                    "verdict": "up",
+                    "reason": "Directly useful, we should build this",
+                    "reviewed_at": "2026-09-01T10:00:00+00:00",
+                },
+                {
+                    "idea_id": "mock-g2",
+                    "lane": "grounded",
+                    "idea_summary": "Mandatory design-doc template before any new project starts",
+                    "verdict": "down",
+                    "reason": "Too much process overhead for a student club",
+                    "reviewed_at": "2026-09-02T10:00:00+00:00",
+                },
+            ],
+        }
 
         # Raw content for the verification loop to check claims against —
         # mirrors the IDs used elsewhere above, just as prose a model can read.
@@ -120,6 +190,9 @@ class MockMemory(MemoryInterface):
             "proj-rag-d": "Project proj-rag-d: a RAG project.",
             "proj-callgpt": "Project proj-callgpt: ARIES's WebRTC-based voice pipeline project.",
             "res-1": "Research entry res-1: 'Weak supervision for document layout understanding' — topic: document understanding.",
+            "evt-hackathon-2025-11": "Event evt-hackathon-2025-11: Overnight Hardware Hackathon. Attendance 42, feedback score 4.6/5. Highest turnout of the semester; multiple people asked for a sequel.",
+            "evt-ml-talk-2025-09": "Event evt-ml-talk-2025-09: Intro to Diffusion Models talk. Attendance 11, feedback score 2.8/5. Too theoretical, wanted a hands-on component.",
+            "evt-workshop-2025-08": "Event evt-workshop-2025-08: Git & GitHub onboarding workshop. Attendance 35, feedback score 4.1/5. Well-received by first-years, hasn't been repeated since new members joined.",
         }
 
     def poll_new_project_closures(self, since: str) -> list[str]:
@@ -149,6 +222,18 @@ class MockMemory(MemoryInterface):
     def get_light_research_digest(self, since: str) -> list[dict[str, Any]]:
         return list(self._light_digest)
 
+    def get_event_history(self) -> list[dict[str, Any]]:
+        return list(self._events)
+
+    def get_recent_feedback(
+        self, lane: str, limit: int = 5, verdict: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        entries = self._feedback.get(lane, [])
+        if verdict:
+            entries = [e for e in entries if e["verdict"] == verdict]
+        entries = sorted(entries, key=lambda e: e.get("reviewed_at") or "", reverse=True)
+        return entries[:limit]
+
     def get_pitch_history(self) -> list[dict[str, Any]]:
         return list(self._pitch_history)
 
@@ -177,6 +262,10 @@ class LapisAdapter(MemoryInterface):
         vault/projects/*.md   frontmatter: status: active|closed, cause: ..., technologies: [...]
         vault/research/*.md   frontmatter: depth: light|deep, topic: ..., added_at: ...
         vault/pitches/*.md    frontmatter: origin, status, created_at
+        vault/events/*.md     frontmatter: type, date, attendance: int, feedback_score: float,
+                               feedback_notes: ... (this one is a bigger guess than the rest —
+                               event feedback isn't modeled in Lapis yet as far as this codebase
+                               knows, so treat this layout as a starting proposal, not a fact)
 
     Every method here is a real starting implementation against that
     assumed layout, not a NotImplementedError placeholder — so once the
@@ -234,12 +323,17 @@ class LapisAdapter(MemoryInterface):
             if n.get("status") == "closed" and n.get("cause")
         }
 
-    def get_capability_usage_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
+    def get_capability_usage(self) -> dict[str, list[str]]:
+        # FIX: this method previously existed as get_capability_usage_counts,
+        # returning {tech: count} — a different name AND a different shape
+        # than the abstract method on MemoryInterface requires ({tech: [ids]}).
+        # LapisAdapter could never actually be instantiated as a result
+        # (ABCMeta blocks it) until this was renamed and reshaped to match.
+        usage: dict[str, list[str]] = {}
         for n in self._read_notes("projects"):
             for tech in n.get("technologies", []):
-                counts[tech] = counts.get(tech, 0) + 1
-        return counts
+                usage.setdefault(tech, []).append(n["_id"])
+        return usage
 
     def get_research_entry(self, entry_id: str) -> dict[str, Any]:
         for n in self._read_notes("research"):
@@ -259,6 +353,37 @@ class LapisAdapter(MemoryInterface):
 
     def get_light_research_digest(self, since: str) -> list[dict[str, Any]]:
         return [n for n in self._read_notes("research") if n.get("added_at", "") > since]
+
+    def get_event_history(self) -> list[dict[str, Any]]:
+        # Unconfirmed layout, see class docstring. Adjust field names
+        # once Lapis's actual events schema exists.
+        return self._read_notes("events")
+
+    def read_file(self, path: str) -> Optional[str]:
+        """Generic single-file read, distinct from _read_notes (which
+        globs a directory of one-record-per-file notes). The feedback
+        log is the opposite shape: one file per lane holding a growing
+        list of entries — so it needs plain path-based read/write, not
+        the per-note pattern the rest of this class uses."""
+        full = self.vault / path
+        if not full.exists():
+            return None
+        return full.read_text(encoding="utf-8")
+
+    def write_file(self, path: str, content: str) -> None:
+        full = self.vault / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content, encoding="utf-8")
+
+    def get_recent_feedback(
+        self, lane: str, limit: int = 5, verdict: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        # Delegates to lapis_feedback_store rather than re-parsing the
+        # frontmatter format here — that module is the single definition
+        # of the feedback file format; duplicating the parsing logic in
+        # two places is exactly how the two versions quietly drift apart.
+        from lapis_feedback_store import get_recent_feedback as _get_recent_feedback
+        return _get_recent_feedback(self, lane, limit=limit, verdict=verdict)
 
     def get_pitch_history(self) -> list[dict[str, Any]]:
         return self._read_notes("pitches")
@@ -294,9 +419,9 @@ class LapisAdapter(MemoryInterface):
         f.write_text(f"---\n{header}---\n{body}", encoding="utf-8")
 
     def get_record(self, record_id: str) -> Optional[dict[str, Any]]:
-        # A cited ID could be a project or a research entry — check both
-        # rather than assuming, since evidence can point at either.
-        for subdir in ("projects", "research"):
+        # A cited ID could be a project, research entry, or event — check
+        # all three rather than assuming, since evidence can point at any.
+        for subdir in ("projects", "research", "events"):
             for n in self._read_notes(subdir):
                 if n["_id"] == record_id:
                     return n

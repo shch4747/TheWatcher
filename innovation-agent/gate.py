@@ -77,8 +77,11 @@ def check_novelty(idea: Idea) -> GateResult:
         if len(idea.statement.split()) < 8:
             return GateResult(False, PitchStatus.GATED_OUT, ["too thin to be substantive"])
         return GateResult(True, PitchStatus.PENDING, [])
+    # Everything else (grounded / bridged / events) is expected to cite
+    # real evidence, since each of those lanes is anchored in a specific
+    # memory query rather than unconstrained like free.
     if not idea.evidence:
-        return GateResult(False, PitchStatus.GATED_OUT, ["no evidence attached for a grounded/bridged pitch"])
+        return GateResult(False, PitchStatus.GATED_OUT, [f"no evidence attached for a {idea.origin.value} pitch"])
     if all(e.status == EvidenceStatus.UNVERIFIED for e in idea.evidence):
         return GateResult(False, PitchStatus.GATED_OUT, ["all cited evidence failed independent verification"])
     return GateResult(True, PitchStatus.PENDING, [])

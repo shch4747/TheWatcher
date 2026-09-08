@@ -1,5 +1,5 @@
 """
-Thin wrapper around the LLM API for the three lanes.
+Thin wrapper around the LLM API for the four lanes.
 
 `generate_ideas` is the only entry point the lanes call. Ideas are
 generated via a forced tool call against a JSON schema that mirrors

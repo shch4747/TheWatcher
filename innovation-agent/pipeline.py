@@ -49,6 +49,13 @@ def run_weekly_sweep(memory: MemoryInterface) -> list[Pitch]:
     return _to_pitches(ideas, memory)
 
 
+def run_events_sweep(memory: MemoryInterface) -> list[Pitch]:
+    """Call this on the same weekly schedule as run_weekly_sweep. Kept
+    as its own entry point rather than folded into run_weekly_sweep, so
+    the existing three lanes' call sites don't change."""
+    return _to_pitches(lanes.events_weekly_sweep(memory), memory)
+
+
 def record_human_outcome(memory: MemoryInterface, pitch_id: str, outcome: str, note: str = "") -> None:
     """Call this when a human resolves a pitch (pursue / defer / reject)."""
     memory.write_outcome(pitch_id, outcome, note)

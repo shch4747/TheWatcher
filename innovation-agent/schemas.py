@@ -15,6 +15,7 @@ class Origin(str, Enum):
     GROUNDED = "grounded"
     BRIDGED = "bridged"
     FREE = "free"
+    EVENTS = "events"
 
 
 class EvidenceStatus(str, Enum):
