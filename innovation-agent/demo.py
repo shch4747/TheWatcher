@@ -7,8 +7,7 @@ whatever ideas actually came out of this run instead of hardcoded
 samples.
 
 Run:  python demo.py
-With a real LLM: export OPENROUTER_API_KEY=... first (this codebase
-talks to OpenRouter, not Anthropic directly — see llm_client.py).
+With a real LLM: export OPENROUTER_API_KEY=... first 
 Without a key, everything still runs end to end on stub ideas.
 """
 from memory_interface import MockMemory
