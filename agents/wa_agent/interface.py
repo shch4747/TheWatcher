@@ -124,11 +124,19 @@ async def _unprocessed_messages(channel: str) -> list[BufferedMessage]:
     return out
 
 
-async def cut_batch(channel: str, now: datetime | None = None) -> list[BufferedMessage] | None:
+async def cut_batch(
+    channel: str, now: datetime | None = None, force: bool = False
+) -> list[BufferedMessage] | None:
     """Idempotent on message ids: callers mark rows processed after a
-    successful write, so a retry sees the same unprocessed set again."""
+    successful write, so a retry sees the same unprocessed set again.
+    `force=True` (the `/ingest` command) skips the N/T/quiet thresholds
+    entirely and cuts whatever's unprocessed right now - for "why hasn't
+    this shown up yet" debugging, not something the scheduled tick ever
+    sets."""
     messages = await _unprocessed_messages(channel)
-    if not is_batch_ready(messages, now):
+    if not messages:
+        return None
+    if not force and not is_batch_ready(messages, now):
         return None
     return messages[: settings.batch_n] if len(messages) > settings.batch_n else messages
 
@@ -280,12 +288,15 @@ async def run_batch(
     worker_client: TextModelClient,
     skills_dir: Path | None = None,
     now: datetime | None = None,
+    force: bool = False,
 ) -> BatchResult | None:
     """Orchestrates one batch: cut -> assign -> write thread pages ->
     advance cursor -> mark processed -> post notices. Returns None if the
-    batch isn't ready yet (Spec: batch cut per channel, idempotent)."""
+    batch isn't ready yet (Spec: batch cut per channel, idempotent).
+    `force=True` bypasses the N/T/quiet-period thresholds in cut_batch -
+    see its docstring."""
 
-    messages = await cut_batch(channel_jid, now)
+    messages = await cut_batch(channel_jid, now, force=force)
     if messages is None:
         return None
 

@@ -63,9 +63,12 @@ process start, so `docker compose up -d` after editing it is enough.
   `/unwatch <jid>` - stop watching a *different* channel by jid (from
   `/channels`), without needing to be a member of it.
 - `/status` - kind/initiative/cursor for the channel this is sent from.
-- `/ingest` - run the batch-cutting ingestion job (`ingest_tick`) right
-  now instead of waiting for its next 2-minute tick - useful right
-  after `/setup` or while testing against a live channel.
+- `/ingest` - cut and process whatever's unprocessed right now, for
+  every watched channel, **ignoring** BATCH_N/BATCH_T_MINUTES/
+  BATCH_QUIET_MINUTES (runs as `ingest_now`, sharing `ingest_tick`'s
+  lock so the two can't overlap) - unlike the scheduled `ingest_tick`
+  tick, which always respects those thresholds and can legitimately do
+  nothing if a batch isn't ready yet.
 - `/health` - gowa/vault/model connectivity, admin/channel/proposal
   counts, and the outcome of each scheduled job's last run
   (`ingest_tick`, `lifecycle_tick`, `project_agent_tick`) - check this

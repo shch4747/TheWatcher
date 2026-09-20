@@ -211,11 +211,11 @@ async def test_channels_and_unwatch_dispatch_through_handle_command(vault: Local
 
 async def test_ingest_command_reports_unregistered_job_cleanly(vault: LocalDirClient):
     reply = await gateway.trigger_ingest(ADMIN)
-    assert "ingest_tick" in reply
+    assert "ingest_now" in reply
 
     dispatched = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/ingest", vault)
     assert dispatched is not None
-    assert "ingest_tick" in dispatched or "triggered" in dispatched.lower()
+    assert "ingest_now" in dispatched or "triggered" in dispatched.lower()
 
 
 async def test_ingest_command_refuses_non_admin():

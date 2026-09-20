@@ -413,19 +413,20 @@ async def channels_report(requested_by: str) -> str:
 
 
 async def trigger_ingest(requested_by: str) -> str:
-    """`/ingest`: run the batch-cutting ingestion job right now instead
-    of waiting for its next scheduled tick - useful right after `/setup`
-    or when testing against a live channel. Shares `ingest_tick`'s lock
-    key, so this can't run concurrently with (or duplicate) the
-    scheduled tick; it just runs it early."""
+    """`/ingest`: cut and process whatever's unprocessed right now,
+    ignoring the BATCH_N/BATCH_T_MINUTES/BATCH_QUIET_MINUTES thresholds
+    that gate the scheduled `ingest_tick` - useful right after `/setup`,
+    or any time you don't want to wait out the quiet period while
+    testing. Runs as the `ingest_now` job, which shares `ingest_tick`'s
+    lock key so the two can never run concurrently."""
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /ingest."
     try:
-        result = await run_job("ingest_tick")
+        result = await run_job("ingest_now")
     except KeyError:
-        return "ingest_tick isn't registered - is the app running via main.py (not just uvicorn)?"
+        return "ingest_now isn't registered - is the app running via main.py (not just uvicorn)?"
     if result.outcome == "success":
-        return "Ingestion triggered ✅"
+        return "Ingestion triggered ✅ (ignored batch thresholds - cut whatever was unprocessed)"
     return f"Ingestion failed: {result.error}"
 
 

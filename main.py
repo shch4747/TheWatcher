@@ -26,7 +26,7 @@ from shared.gateway.app import app as fastapi_app
 from shared.gateway.interface import list_channels, notify_admins, register_message_hook
 from shared.models.decision import default_decision_client
 from shared.models.text import worker_model
-from shared.scheduler.interface import RunEvery, due_jobs, register, run_job
+from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, run_job
 from shared.wiki.interface import default_vault_client, slugify
 
 logger = logging.getLogger(__name__)
@@ -42,12 +42,19 @@ async def _chat_hook(payload: dict, channel_jid: str) -> None:
     await handle_chat_message(payload, channel_jid, default_vault_client(), decision, worker)
 
 
-async def _ingest_tick() -> None:
+async def _ingest_tick(force: bool = False) -> None:
     vault = default_vault_client()
     worker = worker_model()
     decision = default_decision_client(worker)
     for channel in await list_channels():
-        await run_batch(channel.jid, vault, decision, worker)
+        await run_batch(channel.jid, vault, decision, worker, force=force)
+
+
+async def _ingest_now() -> None:
+    """`/ingest`'s job (shared.gateway.interface.trigger_ingest): cuts
+    whatever's unprocessed right now, ignoring BATCH_N/T/QUIET - unlike
+    `ingest_tick`'s own scheduled runs, which always respect them."""
+    await _ingest_tick(force=True)
 
 
 async def _lifecycle_tick() -> None:
@@ -84,6 +91,15 @@ def setup_jobs() -> None:
         _ingest_tick,
         RunEvery(timedelta(minutes=2)),
         lock_key="ingest_tick",
+        max_retries=1,
+        on_failure=_notify_job_failure,
+    )
+    register(
+        "ingest_now",
+        _ingest_now,
+        # RunAfter is never auto-fired by due_jobs() - only /ingest calls run_job("ingest_now") directly.
+        RunAfter("manual-ingest"),
+        lock_key="ingest_tick",  # shares ingest_tick's lock so the two can't run concurrently
         max_retries=1,
         on_failure=_notify_job_failure,
     )

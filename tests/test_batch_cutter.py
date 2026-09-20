@@ -101,6 +101,23 @@ async def test_is_batch_ready_requires_size_and_quiet():
         fake_settings.batch_n, fake_settings.batch_quiet_minutes = original_n, original_quiet
 
 
+async def test_cut_batch_force_ignores_thresholds():
+    channel = "888-force-test@g.us"
+    await _seed_channel(channel, title="Force Test")
+    await _seed_messages(channel, ["just one message, nowhere near batch_n or quiet"])
+
+    assert await wa_agent.cut_batch(channel) is None  # default thresholds: not ready yet
+    forced = await wa_agent.cut_batch(channel, force=True)
+    assert forced is not None
+    assert len(forced) == 1
+
+
+async def test_cut_batch_force_with_nothing_unprocessed_still_returns_none():
+    channel = "777-force-empty@g.us"
+    await _seed_channel(channel, title="Force Empty")
+    assert await wa_agent.cut_batch(channel, force=True) is None
+
+
 async def test_run_batch_creates_new_thread_with_summary_items_timeline(
     vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
 ):
