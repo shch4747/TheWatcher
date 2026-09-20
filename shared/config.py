@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     gowa_basic_auth: str | None = None
     gowa_device_id: str | None = None
     gowa_webhook_secret: str = "dev-secret"
+    # Comma-separated previous secret(s), still accepted during a
+    # rotation window so gowa's config can be updated without a moment
+    # of dropped webhooks (Plan Phase 6: "webhook secret rotation").
+    gowa_webhook_secret_previous: str = ""
     wa_send_min_gap_s: float = 4.0
 
     database_url: str = "sqlite+aiosqlite:///./watcher.db"

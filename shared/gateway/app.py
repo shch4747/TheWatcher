@@ -1,5 +1,6 @@
 """FastAPI process: the one thing that runs in the container next to gowa
-(Spec: "operators... one Docker container"). Phase 0: webhook intake only."""
+(Spec: "operators... one Docker container"). Webhook intake plus the
+thin HTTP adapter (shared/http_adapter.py) for out-of-process callers."""
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -8,6 +9,7 @@ from fastapi import FastAPI, Header, Request, Response
 
 from shared.db import init_db
 from shared.gateway.interface import receive_webhook
+from shared.http_adapter import router as http_adapter_router
 
 
 @asynccontextmanager
@@ -17,6 +19,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="watcher-gateway", lifespan=lifespan)
+app.include_router(http_adapter_router)
 
 
 @app.post("/webhook/gowa")

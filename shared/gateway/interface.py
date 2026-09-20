@@ -62,11 +62,20 @@ class SendResult(BaseModel):
 
 
 def verify_signature(body: bytes, signature: str | None) -> bool:
-    """HMAC-SHA256 over the raw body, compared with the gowa webhook secret."""
+    """HMAC-SHA256 over the raw body, checked against the current secret
+    and, during a rotation window, the previous one too - so updating
+    gowa's webhook secret doesn't have to happen in the same instant as
+    updating ours (security pass: webhook secret rotation)."""
     if not signature:
         return False
-    expected = hmac.new(settings.gowa_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    secrets = [settings.gowa_webhook_secret]
+    if settings.gowa_webhook_secret_previous:
+        secrets.append(settings.gowa_webhook_secret_previous)
+    return any(
+        hmac.compare_digest(hmac.new(s.encode(), body, hashlib.sha256).hexdigest(), signature)
+        for s in secrets
+        if s
+    )
 
 
 async def is_bot_admin(wa_identity: str) -> bool:

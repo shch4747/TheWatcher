@@ -1,0 +1,113 @@
+---
+type: note
+title: Operations — deploy, re-login, rotation, backup/restore
+status: draft
+tags:
+  - watcher
+  - ops
+---
+# Operations
+
+For the team running Watcher day to day, not for contributors reading
+the code. See [[Spec - Watcher v1]] for what the system does and
+`AGENTS.md` for the module boundaries if you're changing code.
+
+## Deploy
+
+1. Copy `.env.example` to `.env` and fill in `GOWA_BASIC_AUTH`,
+   `GOWA_WEBHOOK_SECRET` (a random string - reused by gowa and watcher,
+   see `docker-compose.yml`), and `MODELS_API_KEY` once you have one.
+2. `docker compose up -d --build`.
+3. Log gowa in: open `http://<host>:3000/app/login` (or the container's
+   logs on first boot) and scan the QR with the dedicated WhatsApp
+   number (ADR-0001: the number is disposable, never a personal one).
+4. Confirm `GET http://<host>:8000/healthz` returns `{"ok": true}`.
+5. As a Bot Admin, DM... no - message an allowlisted or new group with
+   `/setup other` to confirm the webhook path end to end, then
+   `/setup project <Title>` for a real project.
+
+Nothing here needs a rebuild for config-only changes - `.env` is read at
+process start, so `docker compose up -d` after editing it is enough.
+
+## Re-login after a ban
+
+The number is disposable by design (ADR-0001 consequence: "losing the
+number costs a re-login, not data" - Spec user story 48). If gowa's
+session drops or the number gets banned:
+
+1. `docker compose restart gowa` (or `up -d` if the container itself
+   needs replacing).
+2. Re-scan the QR at `/app/login` with the same or a new SIM.
+3. Nothing in `watcher`'s own database needs touching - `channels`,
+   `messages_buffer`, threads on the wiki, etc. are all keyed by JIDs
+   gowa gives you again on reconnect, not by the underlying phone
+   number.
+4. If you swapped to a genuinely new number, gowa will report a new
+   device/JID; existing channel JIDs (group JIDs) don't change when the
+   *bot's* number changes, so no channel re-setup is needed either.
+
+## Rotating the webhook secret
+
+`shared/gateway/interface.py`'s `verify_signature` accepts both
+`GOWA_WEBHOOK_SECRET` and `GOWA_WEBHOOK_SECRET_PREVIOUS` at once, so you
+can rotate without a moment of dropped webhooks:
+
+1. Set `GOWA_WEBHOOK_SECRET_PREVIOUS` to the *current* value of
+   `GOWA_WEBHOOK_SECRET` in `.env`.
+2. Set `GOWA_WEBHOOK_SECRET` to a new random value.
+3. `docker compose up -d` (recreates `watcher` with both values live).
+4. Update gowa's own webhook secret config to the new value and restart
+   `gowa`.
+5. Once you've confirmed webhooks are flowing again, remove
+   `GOWA_WEBHOOK_SECRET_PREVIOUS` and redeploy once more to stop
+   accepting the old one.
+
+## CMS token handling
+
+`CMS_TOKEN` (and `MODELS_API_KEY`, `GOWA_BASIC_AUTH`) live only in
+`.env`, never in the wiki, never in a commit. `shared/cms/interface.py`'s
+`CmsClient` sends it as a Bearer token and caches lookups for
+`cache_ttl_s` (default 60s) so a compromised or expired token fails
+fast rather than being retried silently. If a token leaks, rotate it at
+the CMS side first, then update `.env` and redeploy - there's no local
+copy to also scrub.
+
+## PII in the wiki
+
+`shared/wiki/lint.py`'s `lint_text()` flags phone- and email-shaped
+strings in any page section (ADR-0009) - this is exercised by
+`tests/test_lint_and_derive.py` in CI on every push, so a regression
+that stops catching PII fails CI, not just a manual run. Running lint
+against the *live* vault (not just fixtures) is the derived-regeneration
+job's responsibility once wired to the Scheduler (Phase 3's job wiring,
+Plan Phase 1) - `meta/lint.md` is where a human should look for the
+current state of the real vault.
+
+## Restore from backup
+
+Two independent things to back up:
+
+- **The wiki** (Lapis vault): whatever backup mechanism Lapis itself
+  provides for the vault - this repo's `LocalDirClient`/`LapisClient`
+  don't add their own backup, they're just the read/write path.
+- **`watcher.db`** (SQLite, the volume mounted in `docker-compose.yml`):
+  copy the file while the container is stopped (or use
+  `sqlite3 watcher.db ".backup backup.db"` for a live copy). It holds
+  `messages_buffer`, `channels`, `proposals`, `members_registry`, the
+  scheduler's `jobs`/`runs` ledger, and `model_calls` - none of it is
+  reconstructable from the wiki alone (the wiki is *derived from* this
+  plus model output, not the reverse, except human edits inside grammar
+  and `state: ended` - Spec, Shape).
+
+To restore: stop the containers, replace `watcher.db` with the backup,
+restart. The wiki restore (if needed) is independent and happens on the
+Lapis side.
+
+## HTTP adapter
+
+`shared/http_adapter.py` exposes a subset of the package interfaces as
+JSON endpoints under `/api/*` (`/api/gateway/send`,
+`/api/gateway/messages/{id}`, `/api/gateway/channels`,
+`/api/wiki/lint`, `/api/scheduler/due-jobs`). v1 has no out-of-process
+caller that uses these - they exist so the contract is exercised end to
+end (Spec, Shape) and as the seam a later MCP exposure would sit behind.
