@@ -8,6 +8,14 @@ implemented here yet.
 from __future__ import annotations
 
 from shared.wiki.items import Item, format_item_line, parse_item_line, parse_items
+from shared.wiki.lapis_client import (
+    ConflictError,
+    LapisClient,
+    LocalDirClient,
+    ReadResult,
+    VaultClient,
+    WriteResult,
+)
 from shared.wiki.parser import Page, Section, WikiParseError, dump_page, parse_page
 from shared.wiki.schema import SCHEMA_BY_TYPE, Frontmatter, canonical_section_title, owner_of
 
@@ -25,4 +33,10 @@ __all__ = [
     "Frontmatter",
     "canonical_section_title",
     "owner_of",
+    "ConflictError",
+    "LapisClient",
+    "LocalDirClient",
+    "ReadResult",
+    "VaultClient",
+    "WriteResult",
 ]
