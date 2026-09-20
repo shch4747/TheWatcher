@@ -1,117 +1,102 @@
-# TheWatcher — ARIES multi-agent society
+# Watcher — ARIES WhatsApp → wiki bot
 
-A set of cooperating agents for **ARIES** (the AI/ML club of IIT Delhi) that
-keep the club's knowledge, projects, and research current with little manual
-effort. The agents don't call each other directly — they coordinate through a
-shared **Lapis wiki**, which is both ARIES's knowledge base (members,
-projects, events, research) and the message bus between agents. Each agent
-reads what it needs from the wiki and writes its output back; a change to a
-page is what wakes the next agent.
+Watcher is a bot on a dedicated WhatsApp number that sits in ARIES's
+groups, reads them in batches, organises what it sees into per-group
+Threads, and keeps the club's Lapis wiki current: task/decision/resource
+extraction, thread summaries, and a chat interface members can address
+directly. See [`docs/Spec - Watcher v1.md`](docs/Spec%20-%20Watcher%20v1.md)
+for the full problem statement and design, [`docs/Plan - Watcher v1.md`](docs/Plan%20-%20Watcher%20v1.md)
+for the phase-by-phase build, and [`docs/Architecture.md`](docs/Architecture.md)
+for a diagram of how the pieces talk to each other.
 
-```
-                    ┌─────────────────────────────┐
-   WhatsApp  ─────▶ │        Lapis wiki           │ ◀──── arXiv / HF / HN
-   (gowa)           │  (knowledge base + bus)     │       (research sources)
-                    └──────┬───────┬───────┬──────┘
-                           ▲       ▲       ▲
-              WA agent ────┘       │       └──── Research agent
-              (ingest + notify)    │             (papers → project pages)
-                                   │
-                            Innovation agent
-                         (new ideas from everything)
-```
-
-Everything runs on cheap infrastructure: **Lapis** (self-hosted Obsidian-sync
-+ REST vault, `lapis.dvenom.in`), **gowa** (WhatsApp Web multi-device REST
-gateway) for the WhatsApp side, and **OpenRouter** for LLM calls.
-
-## The three agents
-
-| Agent | Language | Trigger | Reads | Writes | Status |
-|---|---|---|---|---|---|
-| **WA agent** | Python | N messages / X hours per group; and other agents poking it | WhatsApp group messages | Research digest, idea inbox, project pages, agent triggers; sends summaries back to WhatsApp | Built, tested on mocks; awaiting live gowa + Lapis token |
-| **Research agent** | TypeScript | The WhatsApp digest page changed (hourly poll); + every ~2 days | `WhatsApp/ResearchDigest.md`, project pages, arXiv/HF/HN | Matched papers → each project's page / `Interesting To Research.md` / `Trending Feed.md` | Built, deployable as GitHub Actions |
-| **Innovation agent** | Python | Manual / weekly | Project history, research, org snapshot | Idea pitches → human review → wiki | MVP built (mock memory) |
-
-### WA agent (`wa-agent/`)
-
-The club's WhatsApp presence. It watches project + announcement groups, and
-on a per-group cadence it classifies what was said (via **Kimi K2.6**) into
-typed signals and routes each to where the owning agent expects it: research
-topics to `WhatsApp/ResearchDigest.md`, ideas to `Ideas/Inbox.md`, project
-updates to the project's page. It's also the **outbound gateway** — the only
-thing that talks to WhatsApp — so when another agent has something worth
-sharing, the WA agent decides which group it belongs to (via a group→project
-registry), summarises it in that group's context, and sends it. It also posts
-event/task reminders. Preprocessing handles the messy parts of a real chat:
-dedup, a cheap noise pre-filter (to save tokens), OCR for screenshots, and
-"ask a human to TLDR this" for important voice notes. See `wa-agent/README.md`
-for the design and `wa-agent/testing/test_readme.md` to test it.
-
-### Research agent (`research-agent/`)
-
-Keeps ARIES abreast of relevant work. Three jobs: (1) **WhatsApp-reactive** —
-when the WA agent's research digest changes, it extracts the topics, *reframes
-them through an AI/ML lens*, searches arXiv + Hugging Face, and pushes
-matching papers to the project they're about; (2) **project-relevant** — every
-couple of days re-checks each project's topics against fresh results; (3)
-**trending** — a popularity-sorted snapshot of new AI/ML papers and HN
-stories. Strong dedup (never surfaces the same paper twice) and a full audit
-log. Ships with `LOCAL_MODE`/`DRY_RUN` test modes and deploys as two GitHub
-Actions workflows. See `research-agent/README.md`.
-
-### Innovation agent (`innovation-agent/`)
-
-Proposes new things ARIES could take on. Three "lanes" generate ideas —
-**grounded** (from patterns in the club's own history, e.g. a capability used
-once and forgotten, or a failure cause that keeps recurring), **bridged**
-(from a new research finding connected to an existing capability), and
-**free** (unanchored) — all passing through one shared **gate** (redundancy →
-relevance → novelty) before a human sees the survivors; outcomes are written
-back to memory. Runs manually or weekly. See `innovation-agent/README.md`.
-
-## How they fit together
-
-The intended orchestration (from the design notes):
-
-- A WhatsApp message flows: **chat → WA agent → Project agent**, and the WA
-  agent triggers the **Project agent before the Research agent**.
-- The **Research agent** is otherwise independent, running on its own schedule
-  and reacting to the WhatsApp research digest changing.
-- The **Innovation agent** runs manually/weekly and consumes the *outputs* of
-  the others as its inputs, ensuring they've run recently first.
-- All outbound WhatsApp messaging goes through the WA agent, so rate-limiting
-  and phrasing live in one place.
-
-## Shared conventions
-
-- **Lapis is the single source of truth.** Every agent talks to it over the
-  same REST API (`/api/vaults/:id/{manifest,files/*,search}`), authenticated
-  with a device bearer token. The Python agents wrap this in a `LapisAdapter`
-  behind a memory interface; the TS agent has its own `lapisClient.ts`. Both
-  use the same env-var names (`LAPIS_BASE_URL`, `LAPIS_VAULT_ID`,
-  `LAPIS_BEARER_TOKEN`), so one `.env` serves everything.
-- **OpenRouter** for all LLM calls (Kimi K2.6 for the WA agent; a configurable
-  model for the others).
-- Notes are **markdown + YAML frontmatter**; pages are Title-Cased
-  (`Projects/`, `WhatsApp/ResearchDigest.md`, …).
+This is the v1 build (Phases 0-6 of the Plan, all landed). Two earlier
+prototypes - `agents/innovation-agent/` and `agents/research-agent/` -
+predate this design and are **frozen** until v1 ships; see
+[ADR-0010](docs/adr/0010-freeze-innovation-research-for-v1.md).
 
 ## Repo layout
 
 ```
-TheWatcher/
-├── wa-agent/          # WhatsApp agent (Python) — ingest + outbound gateway
-│   ├── *.py           # package modules
-│   ├── run_live.py    # the deployable receiver
-│   └── testing/       # unit tests + check_lapis.py / check_gowa.py + test_readme.md
-├── research-agent/    # Research agent (TypeScript/Node) — GitHub Actions
-│   └── src/
-└── innovation-agent/  # Innovation agent (Python) — idea generation
+shared/            cross-cutting packages every agent depends on
+  gateway/         gowa I/O: webhook intake, send, commands, identity, proposals
+  wiki/            schema, parser/serialiser, Lapis client, lint, derived regen, templates
+  models/          Decision/Worker/Mentor model tiers, skills, benchmark harness
+  scheduler/       job registry, run ledger, triggers, locks
+  cms/             member lookup (ADR-0009)
+  db.py            the one SQLite schema (ADR-0005: one app, one database)
+  http_adapter.py  thin JSON pass-through over the above, for out-of-process callers
+agents/
+  wa_agent/        batch cutting, thread assignment/writing, lifecycle, Chat Agent
+  project_agent/   Item upsert into initiative pages, Status rewrite
+  innovation-agent/  FROZEN - see ADR-0010
+  research-agent/    FROZEN - see ADR-0010
+skills/            SKILL.md prompt bundles for the Worker/Mentor models
+tests/             pytest suite; tests/fake_gowa/ is the Seam-1 test double
+scripts/           operator/one-off scripts (worker model benchmark)
+docs/              Spec, Plan, ADRs, Wiki Format, Operations
 ```
 
-## Getting started
+`AGENTS.md` has the module-boundary rules (each package's `interface.py`
+is its only public surface).
 
-Each agent has its own README with setup and testing steps. To bring the
-WhatsApp side live, start with `wa-agent/testing/test_readme.md` — it walks
-through testing the Lapis connection and the WhatsApp login before wiring
-anything together.
+## Running it
+
+### Tests (no external services needed)
+
+```sh
+uv sync
+uv run pytest -q
+uv run ruff check .
+uv run mypy shared
+uv run mypy agents/wa_agent
+uv run mypy agents/project_agent
+```
+
+Everything in `tests/` runs against `tests/fake_gowa/` (a gowa test
+double) and `LocalDirClient` (a directory standing in for Lapis) -
+Testing Decisions' Seam 1. No API keys, no live WhatsApp, no live wiki.
+
+### The real thing
+
+1. `cp .env.example .env` and fill in `GOWA_BASIC_AUTH`,
+   `GOWA_WEBHOOK_SECRET` (any random string), and `MODELS_API_KEY` (an
+   OpenRouter key or any OpenAI-compatible provider) once you have one.
+   Everything else has a sane default - see `.env.example` for what
+   each setting does.
+2. `docker compose up -d --build`.
+3. Scan the WhatsApp QR at `http://<host>:3000/app/login` with the
+   dedicated number.
+4. `curl http://<host>:8000/healthz` should return `{"ok": true}`.
+5. As a Bot Admin (see `bot_admins` table / seed one via the DB until
+   `/setup admin` exists), message an allowlisted-to-be group with
+   `/setup other` to confirm the webhook path, then `/setup project
+   <Title>` for a real project - see [`docs/Operations.md`](docs/Operations.md)
+   for the full deploy/re-login/rotation/backup runbook.
+
+Wiring the batch cutter, Chat Agent, and Project Agent into the
+Scheduler as recurring jobs (rather than calling them by hand) is the
+one piece of "glue" left for whoever deploys this for real - the
+functions themselves (`agents/wa_agent/interface.py`'s `run_batch`,
+`agents/project_agent/interface.py`'s `run_project_agent_once`, etc.)
+are all built and tested; `shared/scheduler/interface.py`'s `register()`
+is what a small `main.py` would call for each of them at startup.
+
+### Worker model benchmark (Phase 6)
+
+```sh
+uv run python scripts/run_worker_benchmark.py
+```
+
+Needs `MODELS_API_KEY` set for real - the shipped eval set
+(`tests/fixtures/eval/worker_model_eval.json`) is a small synthetic
+placeholder, not the Spec's real recorded-conversation set. Record the
+result in [`docs/adr/0011-worker-model-choice-TEMPLATE.md`](docs/adr/0011-worker-model-choice-TEMPLATE.md)
+once you've read the outputs yourself.
+
+## Frozen prototypes
+
+`agents/innovation-agent/` (idea generation) and `agents/research-agent/`
+(arXiv/HN/HF digests) are real, working pre-pivot prototypes - not
+scratch code - kept for a post-v1 decision on whether to resume them.
+Don't extend or "clean up" either as a side effect of v1 work; see
+[ADR-0010](docs/adr/0010-freeze-innovation-research-for-v1.md).

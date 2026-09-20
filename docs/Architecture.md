@@ -1,0 +1,89 @@
+---
+type: note
+title: Architecture — Watcher v1
+status: draft
+tags:
+  - watcher
+  - architecture
+---
+# Architecture — Watcher v1
+
+One Python application (ADR-0005), one container, deployed with gowa
+via Docker Compose. Packages under `shared/` are cross-cutting; the two
+in-scope agents (`agents/wa_agent`, `agents/project_agent`) build on top
+of them. See [[Spec - Watcher v1]] for the design behind each box and
+`AGENTS.md` for the import rules the diagram below encodes.
+
+## Runtime data flow
+
+```mermaid
+flowchart TB
+    WA["WhatsApp<br/>(via gowa)"] -->|webhook, HMAC signed| GW
+
+    subgraph Container["one container (ADR-0005)"]
+        GW["shared/gateway<br/>webhook intake, send, commands,<br/>identity, proposals, reactions"]
+        DB[("SQLite<br/>messages_buffer, channels, proposals,<br/>members_registry, jobs/runs, model_calls")]
+        SCHED["shared/scheduler<br/>job registry, run ledger,<br/>per-key locks, retries"]
+        WAAGENT["agents/wa_agent<br/>batch cutter, thread assignment,<br/>lifecycle, Chat Agent"]
+        PAAGENT["agents/project_agent<br/>Item upsert, Status rewrite"]
+        MODELS["shared/models<br/>Decision (Jev) / Worker / Mentor,<br/>skills, benchmark"]
+        WIKI["shared/wiki<br/>schema, parser, lint,<br/>derived regen, templates"]
+        CMS["shared/cms<br/>member lookup"]
+        HTTP["shared/http_adapter<br/>/api/* JSON pass-through"]
+
+        GW --> DB
+        GW -->|is_admin_command| WAAGENT
+        SCHED -->|triggers batches,<br/>staleness, Sunday nudge| WAAGENT
+        SCHED -->|triggers Inbox<br/>consumption| PAAGENT
+        WAAGENT --> MODELS
+        WAAGENT --> WIKI
+        WAAGENT -->|Update Notice| DB
+        PAAGENT -->|consumes Notice| DB
+        PAAGENT --> WIKI
+        GW --> CMS
+        GW -->|Proposal confirm| WIKI
+        HTTP --> GW
+        HTTP --> WIKI
+        HTTP --> SCHED
+    end
+
+    GW -->|send, react| WA
+    WIKI <-->|read-modify-write,<br/>base revision| LAPIS[("Lapis vault<br/>(the wiki)")]
+    MODELS -->|Choice/Noul/Score| JEV["Jev<br/>(Decision Model)"]
+    MODELS -->|generate| OR["OpenRouter or any<br/>OpenAI-compatible endpoint<br/>(Worker/Mentor)"]
+    CMS -->|get_member| ARIESCMS["ARIES CMS<br/>(protected read endpoints)"]
+```
+
+## Module boundaries (enforced by convention, not tooling)
+
+- Every package exposes exactly one `interface.py`; nothing outside a
+  package imports a submodule directly (`shared.gateway.gowa_client`,
+  `shared.wiki.parser`, etc. are never imported from outside their own
+  package) - see `AGENTS.md`.
+- `agents/wa_agent` and `agents/project_agent` never import each other;
+  both go through `shared/*` interfaces for everything (identity,
+  wiki I/O, models, scheduling).
+- `agents/innovation-agent` and `agents/research-agent` are frozen
+  (ADR-0010) and have zero import relationship with anything above -
+  they predate this architecture entirely.
+
+## Test seam (Testing Decisions, Seam 1)
+
+```mermaid
+flowchart LR
+    FG["tests/fake_gowa<br/>(FastAPI test double)"] <-->|same shapes as real gowa| GW2["shared.gateway"]
+    GW2 --> LOGIC["agents/wa_agent, agents/project_agent,<br/>shared/models, shared/scheduler"]
+    LOGIC <--> LDC["LocalDirClient<br/>(a tmp_path directory standing in<br/>for Lapis - same read/write/<br/>base-revision semantics)"]
+```
+
+Whole-pipeline tests replay a webhook through the real `receive_webhook`
+-> `run_batch` -> wiki-write path against `fake_gowa` + `LocalDirClient`,
+asserting on the resulting files and DB rows - never on prompts or
+internal function calls (Testing Decisions).
+
+## What's config, not code
+
+Everything tunable lives in `shared/config.py` / `.env` - batch
+size/timing, stale/silent thresholds, model names and endpoints, CMS/
+Lapis/gowa URLs, the bot's mention name, proposal expiry. Changing
+behaviour rarely means touching a package's logic.
