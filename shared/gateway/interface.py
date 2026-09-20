@@ -42,6 +42,9 @@ from shared.gateway.gowa_client import GowaClient
 from shared.wiki.interface import (
     LocalDirClient,
     VaultClient,
+    append_to_section,
+    dump_page,
+    parse_page,
     render_new_channel_page,
     render_new_event_page,
     render_new_member_page,
@@ -411,6 +414,32 @@ async def propose_identity_link(
     return text
 
 
+async def propose_wiki_write(
+    channel_jid: str, path: str, section: str, line: str, preview_note: str | None = None
+) -> str:
+    """Any Chat Agent write is a Proposal (Spec: Chat Agent) - the bot
+    posts the exact change and waits for a thumbs-up rather than writing
+    directly. `line` is the literal text that will be appended to
+    `section` in `path` on confirm."""
+    expires_at = datetime.now(UTC) + timedelta(hours=settings.proposal_expiry_hours)
+    payload = json.dumps({"path": path, "section": section, "line": line})
+    text = preview_note or f"I'll add this to {path} ({section}):\n> {line}\n\n\U0001f44d to confirm."
+
+    async with get_session() as session:
+        proposal = Proposal(channel=channel_jid, kind="wiki_write", payload=payload, expires_at=expires_at)
+        session.add(proposal)
+        await session.commit()
+        proposal_id = proposal.id
+
+    result = await send(channel_jid, text)
+    async with get_session() as session:
+        row = await session.get(Proposal, proposal_id)
+        if row is not None:
+            row.message_id = result.message_id
+            await session.commit()
+    return text
+
+
 async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClient | None = None) -> str:
     """Execute a pending Proposal (Spec: 👍 within 24h executes it). The
     kind of proposal determines the effect; unknown kinds are refused
@@ -461,6 +490,13 @@ async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClie
                 )
             )
             reply = f"Created [[{title}]] and linked."
+        elif kind == "wiki_write":
+            vault = vault or LocalDirClient(_default_vault_root())
+            path, section, line = data["path"], data["section"], data["line"]
+            read_result = await vault.read(path)
+            page = append_to_section(parse_page(read_result.content), section, [line])
+            await vault.write(path, dump_page(page), base_revision=read_result.revision)
+            reply = f"Added to {path} ({section})."
         else:
             return f"Unknown proposal kind: {kind}"
 

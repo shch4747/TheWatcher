@@ -8,26 +8,26 @@ packages through *their* interfaces.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from shared.config import settings
-from shared.db import Channel, MessageBuffer, Notice, aware_utc, get_session
-from shared.gateway.interface import get_channel_by_kind, list_channels, resolve_sender
+from shared.db import Channel, MessageBuffer, Notice, OutboundLog, aware_utc, get_session
+from shared.gateway.interface import get_channel_by_kind, list_channels, propose_wiki_write, resolve_sender
 from shared.gateway.interface import send as gateway_send
 from shared.models.decision import DecisionModelProtocol
 from shared.models.interface import decide_with_fallback, generate
 from shared.models.skill_loader import load_skills
 from shared.models.text import TextModelClient
 from shared.wiki.interface import (
-    Page,
-    Section,
     VaultClient,
-    canonical_section_title,
+    append_to_section,
     dump_page,
     parse_page,
     render_new_thread_page,
+    replace_managed_section,
     set_frontmatter_field,
     slugify,
 )
@@ -235,53 +235,6 @@ async def _mint_title(messages: list[BufferedMessage], worker_client: TextModelC
     return result.text.strip() or "Untitled thread"
 
 
-def _replace_managed_section(page: Page, title: str, new_body: str) -> Page:
-    """Wholesale rewrite of a managed section's fenced content, keeping
-    the fence markers (Wiki Format: managed = agent rewrites wholesale)."""
-
-    canonical = canonical_section_title(page.page_type, title)
-    new_sections = []
-    for section in page.sections:
-        if canonical_section_title(page.page_type, section.title) == canonical:
-            body = f"<!-- watcher:managed -->\n{new_body}\n<!-- /watcher -->\n"
-            new_sections.append(Section(title=section.title, header_raw=section.header_raw, body=body))
-        else:
-            new_sections.append(section)
-    return Page(
-        page_type=page.page_type,
-        frontmatter=page.frontmatter,
-        frontmatter_raw=page.frontmatter_raw,
-        preamble=page.preamble,
-        sections=new_sections,
-    )
-
-
-def _append_to_section(page: Page, title: str, lines: list[str]) -> Page:
-    """Append-only (Wiki Format: append = agent appends, humans may edit
-    earlier lines) - inserts new lines just before the closing fence."""
-
-    canonical = canonical_section_title(page.page_type, title)
-    new_sections = []
-    addition = "\n".join(lines)
-    for section in page.sections:
-        if canonical_section_title(page.page_type, section.title) == canonical:
-            body = section.body
-            if "<!-- /watcher -->" in body:
-                body = body.replace("<!-- /watcher -->", f"{addition}\n<!-- /watcher -->", 1)
-            else:
-                body = f"{body.rstrip()}\n{addition}\n"
-            new_sections.append(Section(title=section.title, header_raw=section.header_raw, body=body))
-        else:
-            new_sections.append(section)
-    return Page(
-        page_type=page.page_type,
-        frontmatter=page.frontmatter,
-        frontmatter_raw=page.frontmatter_raw,
-        preamble=page.preamble,
-        sections=new_sections,
-    )
-
-
 async def _mark_processed(rows: list[BufferedMessage]) -> None:
     async with get_session() as session:
         for m in rows:
@@ -380,9 +333,9 @@ async def run_batch(
             summary, items_text = await _generate_summary_and_items(
                 bucket_messages, thread.summary, worker_client, skills
             )
-            page = _replace_managed_section(page, "Summary", summary)
-            page = _replace_managed_section(page, "Items", items_text)
-            page = _append_to_section(page, "Timeline", timeline_lines)
+            page = replace_managed_section(page, "Summary", summary)
+            page = replace_managed_section(page, "Items", items_text)
+            page = append_to_section(page, "Timeline", timeline_lines)
             if thread.state == "stale":
                 # a new message revives a stale thread (Spec: "revivable")
                 page = set_frontmatter_field(page, "state", "active")
@@ -497,3 +450,122 @@ async def sunday_stale_nudge(vault: VaultClient, now: datetime | None = None) ->
 
     await gateway_send(coordis.jid, text)
     return text
+
+
+_MENTION_RE = re.compile(rf"@{re.escape(settings.bot_mention_name)}\b", re.IGNORECASE)
+_WRITE_VERBS_RE = re.compile(r"\b(note|record|add|mark|remember)\b", re.IGNORECASE)
+
+
+def is_bot_mention(text: str) -> bool:
+    return bool(_MENTION_RE.search(text))
+
+
+async def is_reply_to_bot(quoted_message_id: str | None) -> bool:
+    if not quoted_message_id:
+        return False
+    async with get_session() as session:
+        row = await session.scalar(
+            select(OutboundLog).where(OutboundLog.message_id == quoted_message_id)
+        )
+    return row is not None
+
+
+def is_write_request(text: str) -> bool:
+    """Deterministic heuristic distinguishing "note that X" from a
+    question - Spec doesn't mandate a specific mechanism, only that
+    every write goes through a Proposal regardless of how it's detected."""
+    return bool(_WRITE_VERBS_RE.search(text))
+
+
+async def find_thread_by_src_id(vault: VaultClient, channel_dir: str, src_id: str) -> ThreadInfo | None:
+    for thread in await list_active_threads(vault, channel_dir):
+        result = await vault.read(thread.path)
+        if f"[src:: {src_id}" in result.content or f"[src:: {src_id}]" in result.content:
+            return thread
+    return None
+
+
+async def identify_thread(
+    text: str,
+    quoted_message_id: str | None,
+    vault: VaultClient,
+    channel_dir: str,
+    decision_client: DecisionModelProtocol,
+    worker_client: TextModelClient,
+) -> ThreadInfo | None:
+    """The quoted message's thread if there is one, else the Decision
+    Model picks among active threads (Spec: Chat Agent flow)."""
+    if quoted_message_id:
+        thread = await find_thread_by_src_id(vault, channel_dir, quoted_message_id)
+        if thread is not None:
+            return thread
+
+    active_threads = await list_active_threads(vault, channel_dir)
+    if not active_threads:
+        return None
+    if len(active_threads) == 1:
+        return active_threads[0]
+
+    options = [t.slug for t in active_threads]
+    question = f"Which active thread is this chat message about?\n\nMessage: {text}"
+    result = await decide_with_fallback(decision_client, worker_client, question, options)
+    return next((t for t in active_threads if t.slug == result.option), active_threads[0])
+
+
+async def answer_from_wiki(thread: ThreadInfo, question: str, worker_client: TextModelClient) -> str:
+    """Read-only QA (Spec: Chat Agent, non-write path) - answers strictly
+    from the thread's own Summary, nothing outside the wiki."""
+    prompt = (
+        f"Thread summary:\n{thread.summary}\n\nQuestion: {question}\n\n"
+        "Answer using only the summary above."
+    )
+    result = await generate(worker_client, "worker", prompt)
+    return result.text.strip()
+
+
+async def interpret_text_approval(reply_text: str, decision_client: DecisionModelProtocol) -> bool:
+    """A text reply (not a reaction) to a Proposal is interpreted by a
+    Decision Model Noul: "is this an approval?" (Spec: Chat Agent)."""
+    result = await decision_client.noul(f"Is this an approval? \"{reply_text}\"")
+    return result.answer
+
+
+async def handle_chat_message(
+    payload: dict,
+    channel_jid: str,
+    vault: VaultClient,
+    decision_client: DecisionModelProtocol,
+    worker_client: TextModelClient,
+) -> str | None:
+    """Deterministic trigger (mention or reply-to-bot) -> identify thread
+    -> read-only answer or Proposal for a write. Returns the reply text
+    sent, or None if the message wasn't addressed to the bot."""
+    fields = _extract_message(payload)
+    text = fields["text"]
+    message_id = fields["id"]
+    quoted_id = payload.get("message", {}).get("replied_to_id")
+
+    mentioned = is_bot_mention(text)
+    replying_to_bot = await is_reply_to_bot(quoted_id)
+    if not mentioned and not replying_to_bot:
+        return None
+
+    async with get_session() as session:
+        channel = await session.scalar(select(Channel).where(Channel.jid == channel_jid))
+    if channel is None:
+        return None
+    channel_dir = slugify(channel.title or channel_jid)
+
+    thread = await identify_thread(text, quoted_id, vault, channel_dir, decision_client, worker_client)
+    if thread is None:
+        reply = "I don't see an active thread to answer that from yet."
+        await gateway_send(channel_jid, reply, reply_to=message_id)
+        return reply
+
+    if is_write_request(text):
+        reply = await propose_wiki_write(channel_jid, thread.path, "Notes", f"- {text}")
+        return reply
+
+    answer = await answer_from_wiki(thread, text, worker_client)
+    await gateway_send(channel_jid, answer, reply_to=message_id)
+    return answer

@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     thread_silent_days: float = 7.0
     lapis_base_url: str = "https://lapis.dvenom.in"
     lapis_vault_id: str = "aries"
+    bot_mention_name: str = "watcher"
 
 
 settings = Settings()

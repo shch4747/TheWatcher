@@ -72,6 +72,53 @@ def set_frontmatter_field(page: Page, key: str, value: str) -> Page:
     )
 
 
+def replace_managed_section(page: Page, title: str, new_body: str) -> Page:
+    """Wholesale rewrite of a managed section's fenced content, keeping
+    the fence markers (Wiki Format: managed = agent rewrites wholesale)."""
+    canonical = canonical_section_title(page.page_type, title)
+    new_sections = []
+    for section in page.sections:
+        if canonical_section_title(page.page_type, section.title) == canonical:
+            body = f"<!-- watcher:managed -->\n{new_body}\n<!-- /watcher -->\n"
+            new_sections.append(Section(title=section.title, header_raw=section.header_raw, body=body))
+        else:
+            new_sections.append(section)
+    return Page(
+        page_type=page.page_type,
+        frontmatter=page.frontmatter,
+        frontmatter_raw=page.frontmatter_raw,
+        preamble=page.preamble,
+        sections=new_sections,
+    )
+
+
+def append_to_section(page: Page, title: str, lines: list[str]) -> Page:
+    """Append new lines to a section - works whether or not the section
+    is fenced (append/derived sections are; human/shared ones, like
+    Notes, usually aren't). Fenced: inserts just before the closing
+    fence. Unfenced: appends at the end of the body."""
+    canonical = canonical_section_title(page.page_type, title)
+    new_sections = []
+    addition = "\n".join(lines)
+    for section in page.sections:
+        if canonical_section_title(page.page_type, section.title) == canonical:
+            body = section.body
+            if "<!-- /watcher -->" in body:
+                body = body.replace("<!-- /watcher -->", f"{addition}\n<!-- /watcher -->", 1)
+            else:
+                body = f"{body.rstrip()}\n{addition}\n"
+            new_sections.append(Section(title=section.title, header_raw=section.header_raw, body=body))
+        else:
+            new_sections.append(section)
+    return Page(
+        page_type=page.page_type,
+        frontmatter=page.frontmatter,
+        frontmatter_raw=page.frontmatter_raw,
+        preamble=page.preamble,
+        sections=new_sections,
+    )
+
+
 @dataclass
 class MemberIndexRow:
     title: str
