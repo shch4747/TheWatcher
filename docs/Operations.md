@@ -115,7 +115,19 @@ Lapis side.
 ## Health checks
 
 `GET /healthz` only says the watcher process itself is up - it doesn't
-tell you gowa or the wiki are reachable. Check those independently:
+tell you gowa or the wiki are reachable. Check those independently from
+the command line:
+
+```sh
+make check-gowa    # or: uv run python scripts/check_gowa.py
+make check-lapis   # or: uv run python scripts/check_lapis.py
+```
+
+Both print `{"ok": true/false, ...}` and exit 1 on failure -
+`check-lapis` also prints which backend it resolved to (`LapisClient` if
+`LAPIS_TOKEN` is set, else the local-directory fallback), so a script
+can tell "not configured" from "configured but unreachable." Or call
+the underlying functions directly from Python:
 
 ```python
 from shared.gateway.interface import check_gowa_connection

@@ -47,17 +47,29 @@ is its only public surface).
 
 ```sh
 uv sync
-uv run pytest -q
-uv run ruff check .
-uv run mypy shared
-uv run mypy agents/wa_agent
-uv run mypy agents/project_agent
-uv run mypy main.py
+make check          # lint + typecheck + test - same as CI
+# or individually:
+make test           # uv run pytest -q
+make lint           # uv run ruff check .
+make typecheck      # uv run mypy shared / agents/* / main.py
 ```
 
 Everything in `tests/` runs against `tests/fake_gowa/` (a gowa test
 double) and `LocalDirClient` (a directory standing in for Lapis) -
 Testing Decisions' Seam 1. No API keys, no live WhatsApp, no live wiki.
+
+### Testing the gowa/Lapis connections separately
+
+```sh
+make check-gowa     # uv run python scripts/check_gowa.py
+make check-lapis    # uv run python scripts/check_lapis.py
+```
+
+Both read your `.env` and print `{"ok": true/false, ...}` - exit code 1
+on failure, so they're script/CI-friendly. `check-lapis` reports which
+backend it's using (`LapisClient` if `LAPIS_TOKEN` is set, otherwise the
+local-directory fallback at `VAULT_ROOT`) so you can tell "not
+configured" from "configured but unreachable."
 
 ### The real thing
 
