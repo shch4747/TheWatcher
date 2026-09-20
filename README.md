@@ -84,8 +84,14 @@ configured" from "configured but unreachable."
    `uvicorn` - it wires the batch cutter, Chat Agent, Project Agent and
    lifecycle jobs into the Scheduler and starts a tick loop, in addition
    to serving the FastAPI app.
-3. Scan the WhatsApp QR at `http://<host>:3000/app/login` with the
-   dedicated number.
+3. Create a gowa device slot and log in - required even for one number,
+   gowa's multi-device API has no implicit default until one exists:
+   ```sh
+   curl -u <user>:<pass> -X POST http://<host>:3000/devices -d '{"device_id": "watcher"}'
+   curl -u <user>:<pass> http://<host>:3000/devices/watcher/login
+   ```
+   Open the returned `qr_link` and scan with the dedicated number (QR
+   expires in 30s - re-run the second command for a fresh one).
 4. `curl http://<host>:8000/healthz` should return `{"ok": true}`; check
    gowa/Lapis reachability separately with `check_gowa_connection()` /
    `check_vault_connection()` (see [`docs/Operations.md`](docs/Operations.md#health-checks)).

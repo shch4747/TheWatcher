@@ -17,10 +17,22 @@ the code. See [[Spec - Watcher v1]] for what the system does and
 1. Copy `.env.example` to `.env` and fill in `GOWA_BASIC_AUTH`,
    `GOWA_WEBHOOK_SECRET` (a random string - reused by gowa and watcher,
    see `docker-compose.yml`), and `MODELS_API_KEY` once you have one.
+   Leave `GOWA_DEVICE_ID` as the example's `watcher` for now (step 3
+   below creates a device with that id) - or pick your own and use it
+   consistently in step 3.
 2. `docker compose up -d --build`.
-3. Log gowa in: open `http://<host>:3000/app/login` (or the container's
-   logs on first boot) and scan the QR with the dedicated WhatsApp
-   number (ADR-0001: the number is disposable, never a personal one).
+3. Create a gowa device slot and log in - required even for a single
+   number, gowa's multi-device API has no implicit default device until
+   one exists:
+   ```sh
+   curl -u <user>:<pass> -X POST http://<host>:3000/devices -d '{"device_id": "watcher"}'
+   curl -u <user>:<pass> http://<host>:3000/devices/watcher/login
+   ```
+   The second call returns a `qr_link` - open it in a browser (it
+   expires in 30s; re-run the same command for a fresh one) and scan it
+   with the dedicated WhatsApp number (ADR-0001: the number is
+   disposable, never a personal one). If you changed `GOWA_DEVICE_ID`
+   away from `watcher`, `docker compose up -d` again to pick it up.
 4. Confirm `GET http://<host>:8000/healthz` returns `{"ok": true}`.
 5. Bootstrap yourself as a Bot Admin - there is no other way in on a
    fresh database:
@@ -46,7 +58,8 @@ session drops or the number gets banned:
 
 1. `docker compose restart gowa` (or `up -d` if the container itself
    needs replacing).
-2. Re-scan the QR at `/app/login` with the same or a new SIM.
+2. Re-fetch the QR for the same device id and scan it with the same or
+   a new SIM: `curl -u <user>:<pass> http://<host>:3000/devices/watcher/login`.
 3. Nothing in `watcher`'s own database needs touching - `channels`,
    `messages_buffer`, threads on the wiki, etc. are all keyed by JIDs
    gowa gives you again on reconnect, not by the underlying phone
