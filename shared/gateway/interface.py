@@ -380,20 +380,35 @@ async def status(channel_jid: str) -> str:
     return f"kind={channel.kind} initiative={channel.initiative or '-'} cursor={channel.cursor or '-'}"
 
 
+async def _group_name_map() -> dict[str, str]:
+    """jid -> WhatsApp group display name, best-effort (Spec: /channels
+    needs a human-readable name, not just the jid it's keyed by
+    internally). Empty on any gowa error - /channels still works, it
+    just falls back to showing raw jids."""
+    try:
+        groups = await _client.list_groups()
+        return {g["JID"]: g["Name"] for g in groups if g.get("JID") and g.get("Name")}
+    except Exception:  # noqa: BLE001 - best-effort lookup, never breaks /channels
+        return {}
+
+
 async def channels_report(requested_by: str) -> str:
-    """`/channels`: every currently-watched channel with its jid (needed
-    to `/unwatch <jid>` one from elsewhere) - Bot Admin only, same as
-    every other channel-management command."""
+    """`/channels`: every currently-watched channel, with its WhatsApp
+    group name (looked up live from gowa) and its jid - the jid is
+    still shown alongside the name since `/unwatch <jid>` needs it.
+    Bot Admin only, same as every other channel-management command."""
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /channels."
     channels = await list_channels()
     if not channels:
         return "No channels are being watched."
+    names = await _group_name_map()
     lines = [f"*Watched channels* ({len(channels)})"]
     for channel in channels:
+        label = f"{names[channel.jid]} ({channel.jid})" if channel.jid in names else channel.jid
         title = f" title={channel.title}" if channel.title else ""
         initiative = f" initiative={channel.initiative}" if channel.initiative else ""
-        lines.append(f"- {channel.jid}  kind={channel.kind}{title}{initiative}")
+        lines.append(f"- {label}  kind={channel.kind}{title}{initiative}")
     return "\n".join(lines)
 
 

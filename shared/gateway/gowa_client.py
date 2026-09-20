@@ -9,6 +9,11 @@ https://github.com/aldinokemal/go-whatsapp-web-multidevice/blob/main/docs/openap
   POST /message/{id}/reaction      body: {phone, emoji}
   GET  /chat/{jid}/messages        ?limit=&offset= -> history backfill
   GET  /app/devices                -> connected device status
+  GET  /user/my/groups             -> {results: {data: [{JID, Name, ...}]}},
+                                       verified live 2026-09-21 - the only
+                                       source of a group's display name;
+                                       channel jids alone are meaningless
+                                       to a human reading /channels.
 
 Group vs DM addressing is just the `phone` value:
   group : "123456789-987654321@g.us"
@@ -94,6 +99,15 @@ class GowaClient:
         resp = await self._client.get(
             f"{self.base_url}/chat/{jid}/messages", params=params, headers=self._headers()
         )
+        resp.raise_for_status()
+        results = resp.json().get("results", {})
+        return results.get("data", [])
+
+    async def list_groups(self) -> list[dict]:
+        """Every group this session is in, with its display `Name` -
+        used to resolve a channel jid to something a human can read
+        (Spec: /channels)."""
+        resp = await self._client.get(f"{self.base_url}/user/my/groups", headers=self._headers())
         resp.raise_for_status()
         results = resp.json().get("results", {})
         return results.get("data", [])
