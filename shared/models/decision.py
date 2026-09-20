@@ -1,16 +1,38 @@
 """Decision Model client (ADR-0006: Jev, sub-second, batched, returns
-probabilities rather than text). `JevClient`'s endpoint shapes are
-provisional - a small in-house client per the Spec, not a public API
-with a fixed contract we can verify against yet. `FixtureDecisionModel`
-is what Phase 1-4's tests actually run against (Testing Decisions:
-"Decision Model responses as probability tables").
+probabilities rather than text). Jev is typesafe.ai's "System One"
+model: three atomic question primitives - Choice, Score, Noul -
+answered directly as structured probabilities instead of generated
+text, via the `typesafe-sdk` package's `system_one()` call
+(docs.typesafe.ai). `JevClient` wraps `AsyncTypeSafeClient` and adapts
+its response shape to our own `ChoiceResult`/`NoulResult`/`ScoreResult`
+(shared.models.schemas) so call sites don't care whether they're
+talking to Jev or `WorkerBackedDecisionModel`.
+
+Two real shape differences from Jev's own response worth noting:
+- Jev's Noul answer is a single `noul: float` probability with no
+  confidence stat at all ("Noul answers don't carry one" -
+  docs.typesafe.ai/confidence). Our NoulResult still wants a
+  `confidence` float (nothing else in this codebase reads it, but the
+  type is shared with `FixtureDecisionModel`), so JevClient derives one
+  as the probability's distance from 0.5, rescaled to 0-1 - a
+  reasonable proxy, not something Jev computes itself.
+- Jev's ChoiceAnswer has its own `confidence` field (a statistic over
+  the whole probability shape, not just probabilities[choice]), but
+  our `ChoiceResult.confidence` is a derived property
+  (`probabilities.get(option)`) that many existing tests construct
+  `ChoiceResult` around directly. JevClient passes through Jev's real
+  probabilities dict as-is; the two confidence definitions usually
+  agree closely enough in practice that reconciling them isn't worth
+  breaking that established internal contract.
+`FixtureDecisionModel` is what Phase 1-4's tests actually run against
+(Testing Decisions: "Decision Model responses as probability tables").
 """
 from __future__ import annotations
 
 import re
 from typing import Protocol
 
-import httpx
+from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, Score
 
 from shared.models.calls import generate
 from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult
@@ -24,38 +46,39 @@ class DecisionModelProtocol(Protocol):
 
 
 class JevClient:
-    def __init__(self, base_url: str, api_key: str | None = None, client: httpx.AsyncClient | None = None):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self._client = client or httpx.AsyncClient(timeout=15)
+    """Thin adapter over `typesafe_sdk.AsyncTypeSafeClient` - one
+    `system_one()` call per question, `state` set to the question text
+    itself since our Choice/Noul/Score questions are already
+    self-contained strings, not separate context + instructions."""
 
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+    def __init__(self, api_key: str | None = None, base_url: str | None = None):
+        self._client = AsyncTypeSafeClient(api_key=api_key, base_url=base_url)
 
     async def choice(self, question: str, options: list[str]) -> ChoiceResult:
-        resp = await self._client.post(
-            f"{self.base_url}/choice",
-            json={"question": question, "options": options},
-            headers=self._headers(),
+        response = await self._client.system_one(
+            state=question,
+            questions={"result": Choice(criteria={option: None for option in options})},
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return ChoiceResult(option=data["option"], probabilities=data["probabilities"])
+        answer = response.choices["result"]
+        return ChoiceResult(option=answer.choice, probabilities=dict(answer.probabilities))
 
     async def noul(self, question: str) -> NoulResult:
-        resp = await self._client.post(
-            f"{self.base_url}/noul", json={"question": question}, headers=self._headers()
+        response = await self._client.system_one(
+            state=question, questions={"result": Noul()}
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return NoulResult(answer=data["answer"], confidence=data["confidence"])
+        probability = response.nouls["result"].noul
+        return NoulResult(answer=probability >= 0.5, confidence=abs(probability - 0.5) * 2)
 
     async def score(self, question: str) -> ScoreResult:
-        resp = await self._client.post(
-            f"{self.base_url}/score", json={"question": question}, headers=self._headers()
+        # Score needs an explicit rubric (criteria); nothing in this
+        # codebase calls .score() yet, so there's no real rubric to
+        # borrow - "low/medium/high" is a generic 3-rung placeholder,
+        # not a verified default. Replace it with real criteria the
+        # moment a caller needs Score for something specific.
+        response = await self._client.system_one(
+            state=question, questions={"result": Score(criteria=["low", "medium", "high"])}
         )
-        resp.raise_for_status()
-        return ScoreResult(value=resp.json()["value"])
+        return ScoreResult(value=response.scores["result"].score)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -102,13 +125,17 @@ class WorkerBackedDecisionModel:
 
 
 def default_decision_client(worker_client: TextModelClient) -> DecisionModelProtocol:
-    """JevClient if JEV_BASE_URL is configured, else the Worker-backed
+    """JevClient if JEV_API_KEY is configured, else the Worker-backed
     fallback - the same choice `shared.cms.interface.default_cms_client()`
-    makes between a live client and a stand-in."""
+    makes between a live client and a stand-in. `base_url` is only
+    needed to point at a non-default Jev deployment (typesafe_sdk
+    defaults to their hosted API and reads TYPESAFE_API_KEY itself, but
+    we pass api_key explicitly so JEV_API_KEY is the one source of
+    truth for it, same as every other credential in .env)."""
     from shared.config import settings
 
-    if settings.jev_base_url:
-        return JevClient(settings.jev_base_url, api_key=settings.jev_api_key)
+    if settings.jev_api_key:
+        return JevClient(api_key=settings.jev_api_key, base_url=settings.jev_base_url or None)
     return WorkerBackedDecisionModel(worker_client)
 
 
