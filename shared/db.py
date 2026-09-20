@@ -152,6 +152,23 @@ class Run(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ModelCall(Base):
+    """Every model call, any tier, logged with tokens and cost (Spec:
+    Models - "every model call is logged with tokens and cost to the run
+    ledger")."""
+
+    __tablename__ = "model_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tier: Mapped[str] = mapped_column(String)  # decision | worker | mentor
+    model_name: Mapped[str] = mapped_column(String)
+    input_tokens: Mapped[int] = mapped_column(default=0)
+    output_tokens: Mapped[int] = mapped_column(default=0)
+    cost_usd: Mapped[float | None] = mapped_column(nullable=True)
+    job_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 _engine = create_async_engine(settings.database_url)
 async_session = async_sessionmaker(_engine, expire_on_commit=False)
 

@@ -22,5 +22,14 @@ class Settings(BaseSettings):
 
     proposal_expiry_hours: float = 24.0
 
+    jev_base_url: str | None = None
+    jev_api_key: str | None = None
+
+    models_base_url: str = "https://openrouter.ai/api/v1"
+    models_api_key: str | None = None
+    worker_model_name: str = "z-ai/glm-5.3-flash"
+    mentor_model_name: str = "anthropic/claude-sonnet-5"
+    decision_confidence_threshold: float = 0.6
+
 
 settings = Settings()
