@@ -8,6 +8,7 @@ RUN uv sync --no-dev --no-install-project
 
 COPY shared ./shared
 COPY agents ./agents
+COPY scripts ./scripts
 COPY main.py ./main.py
 RUN uv sync --no-dev
 
