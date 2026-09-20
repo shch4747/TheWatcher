@@ -1,0 +1,20 @@
+[
+  {
+    "name": "summarise-seminar-hall",
+    "prompt": "[m1] Devansh: can we book the seminar hall for the demo\n[m2] Aira: yes I'll book it for Friday",
+    "system": "Write a 2-3 sentence summary of this WhatsApp thread. Name people by their message names.",
+    "expected_keywords": ["Aira", "seminar hall", "Friday"]
+  },
+  {
+    "name": "extract-decision-item",
+    "prompt": "[m3] Devansh: let's move the demo to next Friday\n[m4] Aira: agreed, Friday it is",
+    "system": "Extract one line in the grammar: - text [kind:: decision] [src:: id] ^id",
+    "expected_keywords": ["decision", "Friday", "src::"]
+  },
+  {
+    "name": "name-thread-from-messages",
+    "prompt": "[m5] Devansh: has anyone looked at the budget for the workshop yet\n[m6] Zara: I'll take a look tonight",
+    "system": "Produce a short 3-7 word title for this thread. Output only the title.",
+    "expected_keywords": ["budget", "workshop"]
+  }
+]

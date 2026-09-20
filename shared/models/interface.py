@@ -8,36 +8,12 @@ items.
 from __future__ import annotations
 
 from shared.config import settings
-from shared.db import ModelCall, get_session
+from shared.models.benchmark import BenchmarkCase, BenchmarkReport, ModelReport, run_benchmark
+from shared.models.calls import generate, log_model_call
 from shared.models.decision import DecisionModelProtocol, FixtureDecisionModel, JevClient
 from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult, TextResult
 from shared.models.skill_loader import Skill, load_skills, load_skills_from_dir, parse_skill_md
-from shared.models.text import TextModelClient, mentor_model, worker_model
-
-
-async def log_model_call(
-    tier: str, model_name: str, input_tokens: int, output_tokens: int, cost_usd: float | None = None
-) -> None:
-    async with get_session() as session:
-        session.add(
-            ModelCall(
-                tier=tier,
-                model_name=model_name,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cost_usd=cost_usd,
-            )
-        )
-        await session.commit()
-
-
-async def generate(client: TextModelClient, tier: str, prompt: str, system: str | None = None) -> TextResult:
-    """Call a Worker/Mentor client and log the usage - the one path every
-    caller should use instead of client.generate() directly, so nothing
-    forgets to log (Spec: "every model call is logged")."""
-    result = await client.generate(prompt, system=system)
-    await log_model_call(tier, client.model_name, result.input_tokens, result.output_tokens)
-    return result
+from shared.models.text import TextModelClient, client_for_model, mentor_model, worker_model
 
 
 async def decide_with_fallback(
@@ -76,6 +52,7 @@ __all__ = [
     "JevClient",
     "FixtureDecisionModel",
     "TextModelClient",
+    "client_for_model",
     "worker_model",
     "mentor_model",
     "log_model_call",
@@ -85,4 +62,8 @@ __all__ = [
     "load_skills",
     "load_skills_from_dir",
     "parse_skill_md",
+    "BenchmarkCase",
+    "BenchmarkReport",
+    "ModelReport",
+    "run_benchmark",
 ]

@@ -33,14 +33,20 @@ class TextModelClient:
         )
 
 
-def _openrouter_model(model_name: str) -> OpenAIChatModel:
+def openrouter_model(model_name: str) -> OpenAIChatModel:
     provider = OpenAIProvider(base_url=settings.models_base_url, api_key=settings.models_api_key)
     return OpenAIChatModel(model_name, provider=provider)
 
 
+def client_for_model(model_name: str) -> TextModelClient:
+    """Any OpenRouter-style model id -> a ready TextModelClient. Used by
+    the Phase 6 benchmark script to try several candidates side by side."""
+    return TextModelClient(openrouter_model(model_name), model_name)
+
+
 def worker_model() -> TextModelClient:
-    return TextModelClient(_openrouter_model(settings.worker_model_name), settings.worker_model_name)
+    return client_for_model(settings.worker_model_name)
 
 
 def mentor_model() -> TextModelClient:
-    return TextModelClient(_openrouter_model(settings.mentor_model_name), settings.mentor_model_name)
+    return client_for_model(settings.mentor_model_name)
