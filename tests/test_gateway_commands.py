@@ -16,7 +16,14 @@ from shared.config import settings
 from shared.db import BotAdmin, Channel, MembersRegistry, get_session
 from shared.gateway import interface as gateway
 from shared.gateway.app import app as gateway_app
-from shared.gateway.commands import LinkCommand, SetupCommand, StatusCommand, UnwatchCommand, parse_command
+from shared.gateway.commands import (
+    HealthCommand,
+    LinkCommand,
+    SetupCommand,
+    StatusCommand,
+    UnwatchCommand,
+    parse_command,
+)
 from shared.wiki.interface import LocalDirClient
 from sqlalchemy import select
 
@@ -63,6 +70,7 @@ def test_parse_command_recognizes_all_shapes():
     assert parse_command("/link 919876543210@s.whatsapp.net [[Aira]]") == LinkCommand(
         sender_ref="919876543210@s.whatsapp.net", member_ref="[[Aira]]"
     )
+    assert parse_command("/health") == HealthCommand()
     assert parse_command("not a command") is None
 
 
@@ -134,6 +142,27 @@ async def test_unwatch_and_status(vault: LocalDirClient):
     assert "not watching" in (await gateway.status(PROJECT_GROUP)).lower()
 
 
+async def test_health_reports_gowa_vault_and_counts():
+    async with get_session() as session:
+        session.add(BotAdmin(wa_identity="health-admin@x"))
+        session.add(Channel(jid="health-chan@g.us", kind="project"))
+        await session.commit()
+
+    report = await gateway.health()
+    assert "gowa:" in report
+    assert "vault:" in report
+    assert "decision model:" in report
+    assert "worker model:" in report
+    assert "bot admins:" in report
+    assert "pending proposals:" in report
+
+
+async def test_health_command_dispatches_through_handle_command(vault: LocalDirClient):
+    reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/health", vault)
+    assert reply is not None
+    assert "gowa:" in reply
+
+
 async def test_link_writes_members_registry():
     cmd = LinkCommand(sender_ref="919876543210@s.whatsapp.net", member_ref="[[Aira]]")
     reply = await gateway.link(cmd, ADMIN)
@@ -197,3 +226,33 @@ async def test_edit_of_unprocessed_message_updates_buffer_in_place(gateway_clien
         row = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == "wamid.EDIT1"))
     assert "edited!" in row.payload
     assert row.event_type == "message.edited"
+
+
+async def test_send_failure_during_command_does_not_crash_webhook_or_strand_message(
+    gateway_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression: gowa rejecting the outbound reply (e.g. missing
+    X-Device-Id) used to raise unhandled out of receive_webhook, 500ing
+    the whole request and leaving the buffered message permanently
+    unprocessed (the dedupe check short-circuits every gowa retry
+    before the command ever runs again)."""
+
+    async def _broken_send(*args, **kwargs):
+        raise RuntimeError("gowa rejected the outbound send")
+
+    monkeypatch.setattr(gateway, "send", _broken_send)
+
+    payload = message_event("wamid.SENDFAIL", "999-sendfail@g.us", "/setup other", sender=ADMIN)
+    body = json.dumps(payload).encode()
+    async with gateway_client as client:
+        resp = await client.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
+
+    assert resp.status_code == 200  # not 500 - the webhook itself succeeded
+
+    from shared.db import MessageBuffer
+
+    async with get_session() as session:
+        row = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == "wamid.SENDFAIL"))
+        channel = await session.scalar(select(Channel).where(Channel.jid == "999-sendfail@g.us"))
+    assert row.processed is True  # not stranded
+    assert channel is not None  # the command still took effect

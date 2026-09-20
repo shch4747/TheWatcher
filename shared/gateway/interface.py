@@ -32,6 +32,7 @@ from shared.db import (
 )
 from shared.gateway.commands import (
     Command,
+    HealthCommand,
     LinkCommand,
     SetupCommand,
     StatusCommand,
@@ -42,9 +43,12 @@ from shared.gateway.commands import (
 from shared.gateway.events import GowaEvent as GowaEvent  # re-exported for agents/wa_agent
 from shared.gateway.events import parse_gowa_event, wrap_backfilled_message
 from shared.gateway.gowa_client import GowaClient
+from shared.scheduler.interface import due_jobs
 from shared.wiki.interface import (
+    LapisClient,
     VaultClient,
     append_to_section,
+    check_vault_connection,
     default_vault_client,
     dump_page,
     parse_page,
@@ -170,11 +174,23 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
 
     if is_admin_command:
         # commands are deterministic and act immediately - they don't wait
-        # for a batch (Spec: Gateway commands).
+        # for a batch (Spec: Gateway commands). A failure here (most
+        # commonly the reply send itself, e.g. gowa rejecting the
+        # outbound call) must never crash the whole webhook request: the
+        # command may have already taken effect (e.g. /setup wrote the
+        # channel row) even if the confirmation couldn't be delivered,
+        # and an unhandled exception here would both 500 the webhook
+        # (gowa retries) and leave the message stuck unprocessed forever
+        # (the dedupe check short-circuits every retry with nothing to
+        # retry, since is_admin_command's branch never runs again for an
+        # already-buffered message_id).
         assert sender is not None  # implied by is_admin_command being True
-        reply = await handle_command(channel, sender, text)
-        if reply:
-            await send(channel, reply)
+        try:
+            reply = await handle_command(channel, sender, text)
+            if reply:
+                await send(channel, reply)
+        except Exception:  # noqa: BLE001 - logged, never crashes webhook intake
+            logger.exception("admin command handling failed for %s in %s", text, channel)
         async with get_session() as session:
             row = await session.get(MessageBuffer, buffered.id)
             if row is not None:
@@ -357,6 +373,47 @@ async def status(channel_jid: str) -> str:
     return f"kind={channel.kind} initiative={channel.initiative or '-'} cursor={channel.cursor or '-'}"
 
 
+async def health() -> str:
+    """`/health`: connectivity + a few counts, for a Bot Admin to sanity
+    check the deployment from their phone without shelling into the
+    container. Checks are read-only and never make a real model call
+    (that would cost money and add latency to a chat command) - the
+    Decision/Worker/Mentor lines report whether they're *configured*,
+    not whether the provider is currently reachable.
+    """
+    lines = ["*Watcher health*"]
+
+    gowa_result = await check_gowa_connection()
+    lines.append(f"gowa: {'✅ ok' if gowa_result.get('ok') else '❌ ' + str(gowa_result.get('error'))}")
+
+    vault = default_vault_client()
+    vault_kind = "Lapis (live)" if isinstance(vault, LapisClient) else "local directory"
+    vault_result = await check_vault_connection(vault)
+    vault_status = "✅ ok" if vault_result.get("ok") else f"❌ {vault_result.get('error')}"
+    lines.append(f"vault: {vault_status} ({vault_kind})")
+
+    if settings.jev_base_url:
+        decision_line = f"decision model: Jev ({settings.jev_base_url})"
+    else:
+        decision_line = "decision model: Worker-backed (no Jev configured)"
+    lines.append(decision_line)
+    lines.append(f"worker model: {settings.worker_model_name}")
+    lines.append(f"mentor model: {settings.mentor_model_name}")
+
+    async with get_session() as session:
+        admin_count = len(list(await session.scalars(select(BotAdmin))))
+        channel_count = len(list(await session.scalars(select(Channel).where(Channel.kind != "unset"))))
+        pending_proposals = len(
+            list(await session.scalars(select(Proposal).where(Proposal.status == "pending")))
+        )
+
+    due = await due_jobs()
+    lines.append(f"bot admins: {admin_count}  watched channels: {channel_count}")
+    lines.append(f"pending proposals: {pending_proposals}  jobs due: {len(due)} {due if due else ''}".strip())
+
+    return "\n".join(lines)
+
+
 async def link(cmd: LinkCommand, requested_by: str) -> str:
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /link."
@@ -393,6 +450,8 @@ async def handle_command(
         return await status(channel_jid)
     if isinstance(cmd, LinkCommand):
         return await link(cmd, sender)
+    if isinstance(cmd, HealthCommand):
+        return await health()
     raise AssertionError(f"unhandled command type: {cmd!r}")
 
 
