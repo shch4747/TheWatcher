@@ -54,7 +54,16 @@ class Page:
         return None
 
 
-def parse_page(text: str) -> Page:
+@dataclass
+class _Split:
+    page_type: str
+    raw_frontmatter: dict
+    frontmatter_raw: str
+    preamble: str
+    sections: list[Section]
+
+
+def _split(text: str) -> _Split:
     match = _FRONTMATTER_RE.match(text)
     if not match:
         raise WikiParseError("page has no frontmatter block")
@@ -64,13 +73,8 @@ def parse_page(text: str) -> Page:
     if "type" not in raw:
         raise WikiParseError("frontmatter missing required 'type' key")
 
-    page_type = raw["type"]
-    schema_cls = SCHEMA_BY_TYPE.get(page_type, Frontmatter)
-    frontmatter = schema_cls.model_validate(raw)
-
     rest = text[match.end() :]
     header_matches = list(_SECTION_HEADER_RE.finditer(rest))
-
     preamble = rest[: header_matches[0].start()] if header_matches else rest
 
     sections: list[Section] = []
@@ -81,13 +85,55 @@ def parse_page(text: str) -> Page:
             Section(title=hm.group(1), header_raw=hm.group(0), body=rest[body_start:body_end])
         )
 
-    return Page(
-        page_type=page_type,
-        frontmatter=frontmatter,
+    return _Split(
+        page_type=raw["type"],
+        raw_frontmatter=raw,
         frontmatter_raw=frontmatter_raw,
         preamble=preamble,
         sections=sections,
     )
+
+
+def parse_page(text: str) -> Page:
+    """Strict parse: raises WikiParseError/pydantic.ValidationError on a
+    bad page. Use `parse_page_lenient` where a bad page must still be
+    inspectable (e.g. lint) rather than aborting the whole run."""
+    split = _split(text)
+    schema_cls = SCHEMA_BY_TYPE.get(split.page_type, Frontmatter)
+    frontmatter = schema_cls.model_validate(split.raw_frontmatter)
+    return Page(
+        page_type=split.page_type,
+        frontmatter=frontmatter,
+        frontmatter_raw=split.frontmatter_raw,
+        preamble=split.preamble,
+        sections=split.sections,
+    )
+
+
+def parse_page_lenient(text: str) -> tuple[Page, Exception | None]:
+    """Structure (sections, preamble) always parses if the frontmatter
+    block exists at all; strict per-type validation failure is returned
+    as the second element instead of raised, with `page.frontmatter`
+    falling back to the loose base model so section data is still usable
+    (Wiki Format principle 12: lint reports, it does not repair - and it
+    can't report on sections it never got to look at)."""
+    split = _split(text)
+    schema_cls = SCHEMA_BY_TYPE.get(split.page_type, Frontmatter)
+    error: Exception | None = None
+    try:
+        frontmatter: Frontmatter = schema_cls.model_validate(split.raw_frontmatter)
+    except Exception as exc:  # noqa: BLE001 - reported to the caller, not swallowed
+        error = exc
+        frontmatter = Frontmatter.model_construct(**split.raw_frontmatter)
+
+    page = Page(
+        page_type=split.page_type,
+        frontmatter=frontmatter,
+        frontmatter_raw=split.frontmatter_raw,
+        preamble=split.preamble,
+        sections=split.sections,
+    )
+    return page, error
 
 
 def dump_page(page: Page) -> str:
