@@ -21,6 +21,7 @@ from shared.scheduler.triggers import RunAfter, RunAt, RunEvery, RunNow, Trigger
 
 __all__ = [
     "JobSpec",
+    "FailureHook",
     "RunResult",
     "register",
     "unregister_all",
@@ -41,6 +42,9 @@ logger = logging.getLogger(__name__)
 Handler = Callable[[], Awaitable[None]]
 
 
+FailureHook = Callable[[str, str], Awaitable[None]]
+
+
 @dataclass
 class JobSpec:
     name: str
@@ -49,6 +53,7 @@ class JobSpec:
     lock_key: str | None = None
     max_retries: int = 0
     base_backoff_s: float = 0.01
+    on_failure: FailureHook | None = None
 
 
 @dataclass
@@ -70,6 +75,7 @@ def register(
     lock_key: str | None = None,
     max_retries: int = 0,
     base_backoff_s: float = 0.01,
+    on_failure: FailureHook | None = None,
 ) -> None:
     _registry[name] = JobSpec(
         name=name,
@@ -78,6 +84,7 @@ def register(
         lock_key=lock_key,
         max_retries=max_retries,
         base_backoff_s=base_backoff_s,
+        on_failure=on_failure,
     )
 
 
@@ -155,6 +162,11 @@ async def _run_with_retries(spec: JobSpec) -> RunResult:
             if attempt <= spec.max_retries:
                 await asyncio.sleep(spec.base_backoff_s * (2 ** (attempt - 1)))
                 continue
+            if spec.on_failure is not None:
+                try:
+                    await spec.on_failure(spec.name, last_error)
+                except Exception:  # noqa: BLE001 - a broken notifier must never hide the real failure
+                    logger.exception("on_failure hook for job %s raised", spec.name)
             return RunResult(job_name=spec.name, attempt=attempt, outcome="failure", error=last_error)
         else:
             async with get_session() as session:

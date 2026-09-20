@@ -73,6 +73,63 @@ async def test_job_exhausting_retries_ends_in_failure():
     assert all(r.outcome == "failure" for r in ledger)
 
 
+async def test_on_failure_hook_fires_once_after_retries_exhausted():
+    calls: list[tuple[str, str]] = []
+
+    async def always_fails() -> None:
+        raise RuntimeError("boom")
+
+    async def hook(job_name: str, error: str) -> None:
+        calls.append((job_name, error))
+
+    scheduler.register(
+        "doomed-job", always_fails, RunNow(), max_retries=1, base_backoff_s=0.001, on_failure=hook
+    )
+    await scheduler.run_job("doomed-job")
+
+    assert len(calls) == 1  # not once per attempt - only after retries are exhausted
+    assert calls[0][0] == "doomed-job"
+    assert "boom" in calls[0][1]
+
+
+async def test_on_failure_hook_does_not_fire_on_eventual_success():
+    attempts = 0
+    calls: list[tuple[str, str]] = []
+
+    async def fails_once() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient")
+
+    async def hook(job_name: str, error: str) -> None:
+        calls.append((job_name, error))
+
+    scheduler.register(
+        "flaky-job", fails_once, RunNow(), max_retries=1, base_backoff_s=0.001, on_failure=hook
+    )
+    result = await scheduler.run_job("flaky-job")
+
+    assert result.outcome == "success"
+    assert calls == []
+
+
+async def test_broken_on_failure_hook_does_not_hide_the_real_failure():
+    async def always_fails() -> None:
+        raise RuntimeError("original failure")
+
+    async def broken_hook(job_name: str, error: str) -> None:
+        raise ValueError("the notifier is itself broken")
+
+    scheduler.register(
+        "doomed-job", always_fails, RunNow(), max_retries=0, base_backoff_s=0.001, on_failure=broken_hook
+    )
+    result = await scheduler.run_job("doomed-job")
+
+    assert result.outcome == "failure"
+    assert "original failure" in (result.error or "")
+
+
 async def test_run_after_event_fires_only_matching_jobs():
     fired = []
 
