@@ -63,6 +63,26 @@ def render_new_event_page(title: str, lead: str, slug: str | None = None) -> str
     )
 
 
+def render_new_member_page(title: str, role: str = "Executive", slug: str | None = None) -> str:
+    slug = slug or slugify(title)
+    return (
+        "---\n"
+        "type: member\n"
+        f"slug: {slug}\n"
+        f"title: {title}\n"
+        f"role: {role}\n"
+        "status: active\n"
+        "whatsapp: linked\n"
+        "---\n"
+        f"# {title}\n"
+        "## About\n\n"
+        "## Projects\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
+        "## Past projects\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
+        "## Open tasks\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
+        "## Notes\n"
+    )
+
+
 def render_new_channel_page(
     title: str, kind: str, slug: str | None = None, initiative: str | None = None
 ) -> str:

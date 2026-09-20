@@ -79,16 +79,37 @@ class SetupSession(Base):
 
 
 class MembersRegistry(Base):
-    """WhatsApp identity <-> wiki member title (ADR-0009: CMS holds the
-    rest). Admin `/link` writes here directly; fuzzy-match auto-linking
-    (Phase 2's other ticket) goes through a Proposal first."""
+    """WhatsApp identity <-> wiki member title, keyed on CMS member id
+    (ADR-0009). Admin `/link` writes here directly; fuzzy-match
+    auto-linking goes through a Proposal first."""
 
     __tablename__ = "members_registry"
 
     wa_identity: Mapped[str] = mapped_column(String, primary_key=True)
     member_title: Mapped[str] = mapped_column(String)
+    cms_member_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     linked_by: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class Proposal(Base):
+    """A change the bot wants to make but won't without a 👍 (ADR-0007:
+    waits are rows). `kind` + `payload` describe what to do on confirm;
+    Phase 2's reaction-handling ticket adds the 👍 -> confirm_proposal
+    wiring, Phase 5 reuses this same table for wiki-write proposals."""
+
+    __tablename__ = "proposals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel: Mapped[str] = mapped_column(String, index=True)
+    kind: Mapped[str] = mapped_column(String)  # e.g. "link_member"
+    payload: Mapped[str] = mapped_column(Text)  # JSON
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending|confirmed|rejected|expired
+    message_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class OutboundLog(Base):

@@ -10,12 +10,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from shared.cms.interface import CmsClientProtocol, MemberRecord, default_cms_client, fuzzy_match_member
 from shared.config import settings
 from shared.db import (
     BotAdmin,
@@ -23,6 +25,7 @@ from shared.db import (
     MembersRegistry,
     MessageBuffer,
     OutboundLog,
+    Proposal,
     SetupSession,
     get_session,
 )
@@ -41,6 +44,7 @@ from shared.wiki.interface import (
     VaultClient,
     render_new_channel_page,
     render_new_event_page,
+    render_new_member_page,
     render_new_project_page,
     slugify,
 )
@@ -325,3 +329,128 @@ async def handle_command(
 
 def _default_vault_root() -> Path:
     return Path(settings.vault_root)
+
+
+async def resolve_sender(wa_identity: str) -> MembersRegistry | None:
+    """Look up a WhatsApp identity in the registry - already-linked
+    senders skip fuzzy matching entirely."""
+    async with get_session() as session:
+        return await session.get(MembersRegistry, wa_identity)
+
+
+async def _admin_channel() -> str | None:
+    coordis = await _channel_by_kind("coordis")
+    return coordis.jid if coordis else None
+
+
+async def propose_identity_link(
+    wa_identity: str,
+    display_name: str,
+    cms_client: CmsClientProtocol | None = None,
+) -> str:
+    """Unknown sender -> fuzzy match against CMS member titles -> Proposal
+    to Bot Admins. No match proposes creating a member page instead of
+    guessing (Spec: Gateway identity)."""
+    already = await resolve_sender(wa_identity)
+    if already is not None:
+        return f"{wa_identity} is already linked to [[{already.member_title}]]."
+
+    cms_client = cms_client or default_cms_client()
+    candidates: list[MemberRecord] = await cms_client.list_members()
+    match = fuzzy_match_member(display_name, candidates)
+
+    expires_at = datetime.now(UTC) + timedelta(hours=settings.proposal_expiry_hours)
+    admin_channel = await _admin_channel()
+
+    if match is not None:
+        payload = json.dumps(
+            {"wa_identity": wa_identity, "member_title": match.title, "cms_member_id": match.cms_id}
+        )
+        text = f"Link *{display_name}* to [[{match.title}]]? \U0001f44d"
+        kind = "link_member"
+    else:
+        payload = json.dumps({"wa_identity": wa_identity, "display_name": display_name})
+        text = f"No member found for *{display_name}* - create a member page and link it? \U0001f44d"
+        kind = "create_member"
+
+    async with get_session() as session:
+        proposal = Proposal(
+            channel=admin_channel or "unknown",
+            kind=kind,
+            payload=payload,
+            expires_at=expires_at,
+        )
+        session.add(proposal)
+        await session.commit()
+        proposal_id = proposal.id
+
+    if admin_channel:
+        result = await send(admin_channel, text)
+        async with get_session() as session:
+            row = await session.get(Proposal, proposal_id)
+            if row is not None:
+                row.message_id = result.message_id
+                await session.commit()
+
+    return text
+
+
+async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClient | None = None) -> str:
+    """Execute a pending Proposal (Spec: 👍 within 24h executes it). The
+    kind of proposal determines the effect; unknown kinds are refused
+    rather than silently ignored."""
+    async with get_session() as session:
+        proposal = await session.get(Proposal, proposal_id)
+        if proposal is None:
+            return "No such proposal."
+        if proposal.status != "pending":
+            return f"Proposal already {proposal.status}."
+        expires_at = proposal.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)  # SQLite drops tz on round-trip
+        if expires_at and datetime.now(UTC) > expires_at:
+            proposal.status = "expired"
+            await session.commit()
+            return "That proposal expired."
+
+        data = json.loads(proposal.payload)
+        kind = proposal.kind
+
+        if kind == "link_member":
+            wa_identity = data["wa_identity"]
+            member_title = data["member_title"]
+            cms_id = data.get("cms_member_id")
+            existing = await session.get(MembersRegistry, wa_identity)
+            if existing is None:
+                session.add(
+                    MembersRegistry(
+                        wa_identity=wa_identity,
+                        member_title=member_title,
+                        cms_member_id=cms_id,
+                        linked_by=confirmed_by,
+                    )
+                )
+            else:
+                existing.member_title = member_title
+                existing.cms_member_id = cms_id
+                existing.linked_by = confirmed_by
+            reply = f"Linked to [[{member_title}]]."
+        elif kind == "create_member":
+            vault = vault or LocalDirClient(_default_vault_root())
+            title = data["display_name"]
+            await vault.write(f"people/{slugify(title)}.md", render_new_member_page(title), base_revision="")
+            session.add(
+                MembersRegistry(
+                    wa_identity=data["wa_identity"], member_title=title, linked_by=confirmed_by
+                )
+            )
+            reply = f"Created [[{title}]] and linked."
+        else:
+            return f"Unknown proposal kind: {kind}"
+
+        proposal.status = "confirmed"
+        proposal.resolved_at = datetime.now(UTC)
+        proposal.resolved_by = confirmed_by
+        await session.commit()
+
+    return reply

@@ -16,5 +16,11 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./watcher.db"
     vault_root: str = "./vault"
 
+    cms_base_url: str | None = None
+    cms_token: str | None = None
+    cms_seed_path: str = "~/projects/watcher-seed/members.json"
+
+    proposal_expiry_hours: float = 24.0
+
 
 settings = Settings()
