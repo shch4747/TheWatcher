@@ -140,6 +140,8 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
             if row is not None:
                 row.processed = True
                 await session.commit()
+    elif event_type == "message.reaction" and sender:
+        await handle_reaction(sender, payload.get("reaction", {}))
     return True
 
 
@@ -454,3 +456,131 @@ async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClie
         await session.commit()
 
     return reply
+
+
+_THUMBS_UP = {"\U0001f44d", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿"}
+
+
+async def handle_reaction(reactor: str, reaction: dict) -> str | None:
+    """A 👍 from a Bot Admin within 24h executes the reacted-to Proposal
+    (Spec: Chat Agent Proposal flow, reused for identity link proposals).
+    Distinguishing the initiative lead from a Bot Admin needs the wiki's
+    `lead:` frontmatter, which isn't wired in here yet - only Bot Admins
+    can confirm via reaction for now; lead-confirmation lands with the
+    Phase 5 Chat Agent ticket that already depends on this one.
+    """
+    emoji = reaction.get("emoji", "")
+    message_id = reaction.get("message_id")
+    if not message_id or emoji not in _THUMBS_UP:
+        return None
+    if not await is_bot_admin(reactor):
+        return None
+
+    async with get_session() as session:
+        proposal = await session.scalar(
+            select(Proposal).where(Proposal.message_id == message_id, Proposal.status == "pending")
+        )
+    if proposal is None:
+        return None
+    return await confirm_proposal(proposal.id, confirmed_by=reactor)
+
+
+async def expire_stale_proposals(now: datetime | None = None) -> int:
+    """Scheduler job body (Phase 3): expired proposals are dropped with a
+    one-line notice, never silently forgotten."""
+    now = now or datetime.now(UTC)
+    async with get_session() as session:
+        pending = await session.scalars(select(Proposal).where(Proposal.status == "pending"))
+        expired = [p for p in pending if p.expires_at and _aware(p.expires_at) < now]
+        for p in expired:
+            p.status = "expired"
+        await session.commit()
+        channels_and_ids = [(p.channel, p.id) for p in expired]
+
+    for channel, proposal_id in channels_and_ids:
+        if channel and channel != "unknown":
+            await send(channel, f"Proposal #{proposal_id} expired without a \U0001f44d.")
+    return len(channels_and_ids)
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+async def get_message(message_id: str) -> dict | None:
+    """Resolve a message by id from what the Gateway has already buffered
+    (ADR-0002: gowa is the raw source of truth; the buffer is our cache of
+    everything we've ingested)."""
+    async with get_session() as session:
+        row = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == message_id))
+    return json.loads(row.payload) if row else None
+
+
+async def get_messages(channel: str, since_id: str | None = None, limit: int = 100) -> list[dict]:
+    async with get_session() as session:
+        stmt = select(MessageBuffer).where(MessageBuffer.channel == channel)
+        if since_id:
+            anchor_stmt = select(MessageBuffer.id).where(MessageBuffer.message_id == since_id)
+            anchor = await session.scalar(anchor_stmt)
+            if anchor is not None:
+                stmt = stmt.where(MessageBuffer.id > anchor)
+        stmt = stmt.order_by(MessageBuffer.id).limit(limit)
+        rows = await session.scalars(stmt)
+    return [json.loads(r.payload) for r in rows]
+
+
+async def get_context(message_id: str, before: int = 5, after: int = 5) -> list[dict]:
+    """Messages around `message_id` in the same channel, in order."""
+    async with get_session() as session:
+        target = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == message_id))
+        if target is None:
+            return []
+        before_rows = await session.scalars(
+            select(MessageBuffer)
+            .where(MessageBuffer.channel == target.channel, MessageBuffer.id < target.id)
+            .order_by(MessageBuffer.id.desc())
+            .limit(before)
+        )
+        after_rows = await session.scalars(
+            select(MessageBuffer)
+            .where(MessageBuffer.channel == target.channel, MessageBuffer.id > target.id)
+            .order_by(MessageBuffer.id)
+            .limit(after)
+        )
+    ordered = list(reversed(list(before_rows))) + [target] + list(after_rows)
+    return [json.loads(r.payload) for r in ordered]
+
+
+async def request_history(channel: str, count: int) -> int:
+    """Backfill: ask gowa for stored history and buffer whatever we don't
+    already have, flagged `event_type="message.backfill"` so summaries can
+    say "(from history)" (Spec: WhatsApp Agent ingestion)."""
+    messages = await _client.get_chat_messages(channel, limit=count)
+    added = 0
+    for m in messages:
+        message_id = m.get("id")
+        if not message_id:
+            continue
+        async with get_session() as session:
+            existing = await session.scalar(
+                select(MessageBuffer).where(MessageBuffer.message_id == message_id)
+            )
+            if existing is not None:
+                continue
+            session.add(
+                MessageBuffer(
+                    message_id=message_id,
+                    channel=channel,
+                    event_type="message.backfill",
+                    payload=json.dumps(m),
+                )
+            )
+            await session.commit()
+            added += 1
+    return added
+
+
+async def react(message_id: str, channel: str, emoji: str) -> None:
+    """Bot-sent reaction (e.g. the ✅ confirming an executed write - Spec:
+    Chat Agent). Not logged to outbound_log since it isn't a text send."""
+    await _client.react(message_id, channel, emoji)
