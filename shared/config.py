@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     batch_t_minutes: float = 180.0
     batch_quiet_minutes: float = 5.0
     thread_stale_days: float = 3.0
+    thread_silent_days: float = 7.0
+    lapis_base_url: str = "https://lapis.dvenom.in"
+    lapis_vault_id: str = "aries"
 
 
 settings = Settings()

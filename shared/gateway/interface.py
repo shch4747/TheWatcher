@@ -175,6 +175,20 @@ async def _channel_by_kind(kind: str) -> Channel | None:
         return await session.scalar(select(Channel).where(Channel.kind == kind))
 
 
+async def get_channel_by_kind(kind: str) -> Channel | None:
+    return await _channel_by_kind(kind)
+
+
+async def list_channels(kind: str | None = None) -> list[Channel]:
+    """Spec (Gateway interface, illustrative): `list_channels()`."""
+    async with get_session() as session:
+        stmt = select(Channel).where(Channel.kind != "unset")
+        if kind:
+            stmt = stmt.where(Channel.kind == kind)
+        rows = await session.scalars(stmt)
+    return list(rows)
+
+
 async def _initiative_page_exists(vault: VaultClient, kind: str, slug: str) -> bool:
     path = f"{'projects' if kind == 'project' else 'events'}/{slug}.md"
     try:

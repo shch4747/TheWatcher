@@ -6,11 +6,14 @@ section are lost and lint warns (Phase 1's lint job flags it separately).
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 
 from shared.wiki.parser import Page, Section
 from shared.wiki.schema import canonical_section_title, owner_of
+
+_FIELD_LINE_RE_TEMPLATE = r"^{key}:.*$"
 
 
 class NotDerivedError(ValueError):
@@ -44,6 +47,28 @@ def set_derived_section(page: Page, title: str, new_body: str) -> Page:
         frontmatter_raw=page.frontmatter_raw,
         preamble=page.preamble,
         sections=new_sections,
+    )
+
+
+def set_frontmatter_field(page: Page, key: str, value: str) -> Page:
+    """Patch one frontmatter key in place, leaving every other byte of
+    the frontmatter block (including unknown keys, Wiki Format principle
+    1) exactly as it was. Used for lifecycle transitions (`state:`,
+    `cursor:`) where rewriting the whole block via YAML dump would risk
+    reordering or reformatting keys a human wrote by hand."""
+    pattern = re.compile(_FIELD_LINE_RE_TEMPLATE.format(key=re.escape(key)), re.MULTILINE)
+    new_line = f"{key}: {value}"
+    if pattern.search(page.frontmatter_raw):
+        new_raw = pattern.sub(new_line, page.frontmatter_raw, count=1)
+    else:
+        new_raw = page.frontmatter_raw.rstrip("\n") + f"\n{new_line}\n"
+
+    return Page(
+        page_type=page.page_type,
+        frontmatter=page.frontmatter,
+        frontmatter_raw=new_raw,
+        preamble=page.preamble,
+        sections=page.sections,
     )
 
 

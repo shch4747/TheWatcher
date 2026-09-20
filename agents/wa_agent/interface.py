@@ -14,7 +14,8 @@ from pathlib import Path
 
 from shared.config import settings
 from shared.db import Channel, MessageBuffer, Notice, aware_utc, get_session
-from shared.gateway.interface import resolve_sender
+from shared.gateway.interface import get_channel_by_kind, list_channels, resolve_sender
+from shared.gateway.interface import send as gateway_send
 from shared.models.decision import DecisionModelProtocol
 from shared.models.interface import decide_with_fallback, generate
 from shared.models.skill_loader import load_skills
@@ -27,6 +28,7 @@ from shared.wiki.interface import (
     dump_page,
     parse_page,
     render_new_thread_page,
+    set_frontmatter_field,
     slugify,
 )
 from sqlalchemy import select
@@ -61,6 +63,7 @@ class ThreadInfo:
     path: str
     title: str
     summary: str
+    state: str
 
 
 @dataclass
@@ -69,6 +72,7 @@ class BatchResult:
     message_count: int
     threads_updated: list[str] = field(default_factory=list)
     threads_created: list[str] = field(default_factory=list)
+    threads_revived: list[str] = field(default_factory=list)
     chatter_count: int = 0
 
 
@@ -124,6 +128,8 @@ async def cut_batch(channel: str, now: datetime | None = None) -> list[BufferedM
 
 
 async def list_active_threads(vault: VaultClient, channel_dir: str) -> list[ThreadInfo]:
+    """Active AND stale threads - stale ones must still be assignable so
+    a new message can revive them (Spec: "stale ... revivable")."""
     paths = await vault.list(f"channels/{channel_dir}")
     threads = []
     for path in paths:
@@ -131,7 +137,8 @@ async def list_active_threads(vault: VaultClient, channel_dir: str) -> list[Thre
             continue  # channel index page itself, not a thread
         result = await vault.read(path)
         page = parse_page(result.content)
-        if page.page_type != "thread" or getattr(page.frontmatter, "state", None) != "active":
+        state = getattr(page.frontmatter, "state", None)
+        if page.page_type != "thread" or state not in ("active", "stale"):
             continue
         summary_section = page.section("Summary")
         threads.append(
@@ -140,6 +147,7 @@ async def list_active_threads(vault: VaultClient, channel_dir: str) -> list[Thre
                 path=path,
                 title=page.frontmatter.title,
                 summary=(summary_section.body if summary_section else "").strip(),
+                state=state,
             )
         )
     return threads
@@ -375,6 +383,10 @@ async def run_batch(
             page = _replace_managed_section(page, "Summary", summary)
             page = _replace_managed_section(page, "Items", items_text)
             page = _append_to_section(page, "Timeline", timeline_lines)
+            if thread.state == "stale":
+                # a new message revives a stale thread (Spec: "revivable")
+                page = set_frontmatter_field(page, "state", "active")
+                result.threads_revived.append(key)
             await vault.write(thread.path, dump_page(page), base_revision=existing.revision)
             result.threads_updated.append(key)
             await _post_notice(channel, key, bucket_messages[-1].message_id)
@@ -382,3 +394,106 @@ async def run_batch(
     await _mark_processed(messages)
     await _advance_cursor(channel_jid, messages[-1].message_id)
     return result
+
+
+def _lapis_link(path: str) -> str:
+    return f"{settings.lapis_base_url}/vault/{settings.lapis_vault_id}/file/{path}"
+
+
+async def check_and_mark_stale(
+    vault: VaultClient, channel_dir: str, now: datetime | None = None
+) -> list[str]:
+    """`active` -> `stale` after `thread_stale_days` without a message
+    (Spec: thread states). Ended threads are handled separately - only a
+    human sets `state: ended`, this job never does."""
+    now = now or datetime.now(UTC)
+    marked = []
+    for path in await vault.list(f"channels/{channel_dir}"):
+        if "/archive/" in path or path.count("/") < 2:
+            continue
+        result = await vault.read(path)
+        page = parse_page(result.content)
+        if page.page_type != "thread" or getattr(page.frontmatter, "state", None) != "active":
+            continue
+        last_message_at = getattr(page.frontmatter, "last_message_at", None)
+        if last_message_at is None:
+            continue
+        if last_message_at.tzinfo is None:
+            last_message_at = last_message_at.replace(tzinfo=UTC)
+        if now - last_message_at >= timedelta(days=settings.thread_stale_days):
+            updated = set_frontmatter_field(page, "state", "stale")
+            await vault.write(path, dump_page(updated), base_revision=result.revision)
+            marked.append(page.frontmatter.slug)
+    return marked
+
+
+async def archive_ended_threads(vault: VaultClient, channel_dir: str) -> list[str]:
+    """A human setting `state: ended` in the wiki moves the file to
+    `channels/archive/<channel>/` on the next run (Spec)."""
+    archived = []
+    for path in await vault.list(f"channels/{channel_dir}"):
+        if "/archive/" in path or path.count("/") < 2:
+            continue
+        result = await vault.read(path)
+        page = parse_page(result.content)
+        if page.page_type != "thread" or getattr(page.frontmatter, "state", None) != "ended":
+            continue
+        archive_path = f"channels/archive/{channel_dir}/{path.split('/')[-1]}"
+        await vault.write(archive_path, result.content, base_revision="")
+        await vault.delete(path)
+        archived.append(page.frontmatter.slug)
+    return archived
+
+
+async def run_lifecycle_for_channel(vault: VaultClient, channel_jid: str) -> dict[str, list[str]]:
+    """One channel's worth of staleness + archival - a Scheduler job body
+    wires this per channel (Phase 3's scheduler, daily)."""
+    async with get_session() as session:
+        channel = await session.scalar(select(Channel).where(Channel.jid == channel_jid))
+    if channel is None:
+        return {"stale": [], "archived": []}
+    channel_dir = slugify(channel.title or channel_jid)
+    stale = await check_and_mark_stale(vault, channel_dir)
+    archived = await archive_ended_threads(vault, channel_dir)
+    return {"stale": stale, "archived": archived}
+
+
+async def sunday_stale_nudge(vault: VaultClient, now: datetime | None = None) -> str | None:
+    """Every Sunday: counts of stale threads and those silent 7+ days,
+    with up to 10 Lapis links, posted to the coordis channel (Spec)."""
+    now = now or datetime.now(UTC)
+    coordis = await get_channel_by_kind("coordis")
+    if coordis is None:
+        return None
+
+    stale_paths: list[str] = []
+    silent_paths: list[str] = []
+    for channel in await list_channels():
+        channel_dir = slugify(channel.title or channel.jid)
+        for path in await vault.list(f"channels/{channel_dir}"):
+            if "/archive/" in path or path.count("/") < 2:
+                continue
+            result = await vault.read(path)
+            page = parse_page(result.content)
+            if page.page_type != "thread":
+                continue
+            state = getattr(page.frontmatter, "state", None)
+            last_message_at = getattr(page.frontmatter, "last_message_at", None)
+            if state == "stale":
+                stale_paths.append(path)
+            if last_message_at is not None:
+                if last_message_at.tzinfo is None:
+                    last_message_at = last_message_at.replace(tzinfo=UTC)
+                if now - last_message_at >= timedelta(days=settings.thread_silent_days):
+                    silent_paths.append(path)
+
+    links = "\n".join(f"- {_lapis_link(p)}" for p in stale_paths[:10])
+    text = (
+        f"There are {len(stale_paths)} stale threads, {len(silent_paths)} of them with no "
+        f"messages in the last {int(settings.thread_silent_days)} days — please mark ended ones."
+    )
+    if links:
+        text += f"\n{links}"
+
+    await gateway_send(coordis.jid, text)
+    return text

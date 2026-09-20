@@ -15,6 +15,7 @@ from shared.wiki.derive import (
     render_members_index,
     render_readme,
     set_derived_section,
+    set_frontmatter_field,
 )
 from shared.wiki.items import Item, format_item_line, parse_item_line, parse_items
 from shared.wiki.lapis_client import (
@@ -68,6 +69,7 @@ __all__ = [
     "render_members_index",
     "render_readme",
     "set_derived_section",
+    "set_frontmatter_field",
     "render_new_channel_page",
     "render_new_event_page",
     "render_new_member_page",

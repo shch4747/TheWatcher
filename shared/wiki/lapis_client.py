@@ -43,6 +43,7 @@ class VaultClient(Protocol):
     async def read(self, path: str) -> ReadResult: ...
     async def write(self, path: str, content: str, base_revision: str) -> WriteResult: ...
     async def list(self, prefix: str) -> list[str]: ...
+    async def delete(self, path: str) -> None: ...
 
 
 def _hash(content: str) -> str:
@@ -87,6 +88,11 @@ class LocalDirClient:
             for p in base.rglob("*.md")
             if ".sync-conflicts" not in p.parts
         )
+
+    async def delete(self, path: str) -> None:
+        file = self._file(path)
+        if file.exists():
+            file.unlink()
 
     def _write_conflict_note(
         self, path: str, base_revision: str, current_content: str, attempted_content: str
@@ -149,6 +155,12 @@ class LapisClient:
         )
         resp.raise_for_status()
         return resp.json().get("paths", [])
+
+    async def delete(self, path: str) -> None:
+        resp = await self._client.delete(
+            f"{self.base_url}/vault/{self.vault_id}/file/{path}", headers=self._headers()
+        )
+        resp.raise_for_status()
 
     async def aclose(self) -> None:
         await self._client.aclose()
