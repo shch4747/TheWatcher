@@ -22,9 +22,18 @@ the code. See [[Spec - Watcher v1]] for what the system does and
    logs on first boot) and scan the QR with the dedicated WhatsApp
    number (ADR-0001: the number is disposable, never a personal one).
 4. Confirm `GET http://<host>:8000/healthz` returns `{"ok": true}`.
-5. As a Bot Admin, DM... no - message an allowlisted or new group with
-   `/setup other` to confirm the webhook path end to end, then
-   `/setup project <Title>` for a real project.
+5. Bootstrap yourself as a Bot Admin - there is no other way in on a
+   fresh database:
+   ```sh
+   docker compose exec watcher uv run python scripts/add_bot_admin.py "<your-wa-jid>"
+   ```
+   You need your own WhatsApp JID as gowa reports it (e.g.
+   `919876543210@s.whatsapp.net`) - send any message to a group the bot
+   is in and read the `sender` field back out of `messages_buffer` (or
+   the container logs) if you don't already know it.
+6. Message an allowlisted or new group with `/setup other` to confirm
+   the webhook path end to end, then `/setup project <Title>` for a
+   real project.
 
 Nothing here needs a rebuild for config-only changes - `.env` is read at
 process start, so `docker compose up -d` after editing it is enough.
@@ -102,6 +111,37 @@ Two independent things to back up:
 To restore: stop the containers, replace `watcher.db` with the backup,
 restart. The wiki restore (if needed) is independent and happens on the
 Lapis side.
+
+## Health checks
+
+`GET /healthz` only says the watcher process itself is up - it doesn't
+tell you gowa or the wiki are reachable. Check those independently:
+
+```python
+from shared.gateway.interface import check_gowa_connection
+from shared.wiki.interface import check_vault_connection, default_vault_client
+
+await check_gowa_connection()                          # {"ok": bool, "data"/"error": ...}
+await check_vault_connection(default_vault_client())    # {"ok": bool, "path_count"/"error": ...}
+```
+
+Both are plain async functions (no HTTP dependency), so a monitoring
+script, a cron job, or a future `/healthz/gowa` + `/healthz/vault`
+endpoint can call them directly. They never raise - a connection
+failure comes back as `{"ok": false, "error": "..."}`, not an exception,
+so a health-check loop can call them unconditionally.
+
+## Recurring jobs
+
+`main.py` (what the Dockerfile actually runs, not raw `uvicorn`) wires
+four Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
+min), `project_agent_tick` (Inbox consumption, every 2 min),
+`lifecycle_tick` (stale/ended handling, daily), `sunday_nudge_tick`
+(daily, only acts on Sundays). It also registers the Chat Agent as a
+real-time message hook, so mentions/replies get answered immediately
+rather than waiting for the next batch. Check `GET /api/scheduler/due-jobs`
+to see what's pending; `shared.scheduler.interface.ledger_tail(name)`
+for a job's recent run history (success/failure, errors).
 
 ## HTTP adapter
 

@@ -10,7 +10,13 @@ from __future__ import annotations
 from shared.config import settings
 from shared.models.benchmark import BenchmarkCase, BenchmarkReport, ModelReport, run_benchmark
 from shared.models.calls import generate, log_model_call
-from shared.models.decision import DecisionModelProtocol, FixtureDecisionModel, JevClient
+from shared.models.decision import (
+    DecisionModelProtocol,
+    FixtureDecisionModel,
+    JevClient,
+    WorkerBackedDecisionModel,
+    default_decision_client,
+)
 from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult, TextResult
 from shared.models.skill_loader import Skill, load_skills, load_skills_from_dir, parse_skill_md
 from shared.models.text import TextModelClient, client_for_model, mentor_model, worker_model
@@ -50,6 +56,8 @@ __all__ = [
     "TextResult",
     "DecisionModelProtocol",
     "JevClient",
+    "WorkerBackedDecisionModel",
+    "default_decision_client",
     "FixtureDecisionModel",
     "TextModelClient",
     "client_for_model",

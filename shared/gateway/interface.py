@@ -10,8 +10,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import httpx
 from pydantic import BaseModel
@@ -40,9 +41,9 @@ from shared.gateway.commands import (
 )
 from shared.gateway.gowa_client import GowaClient
 from shared.wiki.interface import (
-    LocalDirClient,
     VaultClient,
     append_to_section,
+    default_vault_client,
     dump_page,
     parse_page,
     render_new_channel_page,
@@ -52,9 +53,26 @@ from shared.wiki.interface import (
     slugify,
 )
 
+logger = logging.getLogger(__name__)
+
 _client = GowaClient()
 
 SETUP_STEPS = ["lead", "brief", "timeline"]
+
+# Real-time message hooks (e.g. the Chat Agent) are registered here
+# rather than imported directly - shared/gateway must not depend on
+# agents/wa_agent (AGENTS.md: agents depend on shared, never the
+# reverse). The application entrypoint wires this at startup.
+MessageHook = Callable[[dict, str], Awaitable[None]]
+_message_hooks: list[MessageHook] = []
+
+
+def register_message_hook(hook: MessageHook) -> None:
+    """Called for every non-command, non-reaction message that lands in
+    a group already allowlisted (or being set up). A hook that raises is
+    logged and swallowed - a broken Chat Agent must never break webhook
+    intake."""
+    _message_hooks.append(hook)
 
 
 class SendResult(BaseModel):
@@ -154,6 +172,12 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
                 await session.commit()
     elif event_type == "message.reaction" and sender:
         await handle_reaction(sender, payload.get("reaction", {}))
+    elif event_type == "message":
+        for hook in _message_hooks:
+            try:
+                await hook(payload, channel)
+            except Exception:  # noqa: BLE001 - a broken hook must not break intake
+                logger.exception("message hook %r failed for channel %s", hook, channel)
     return True
 
 
@@ -185,6 +209,13 @@ async def _upsert_channel(jid: str, kind: str, title: str | None, initiative: st
 async def _channel_by_kind(kind: str) -> Channel | None:
     async with get_session() as session:
         return await session.scalar(select(Channel).where(Channel.kind == kind))
+
+
+async def check_gowa_connection() -> dict:
+    """Health check: is gowa reachable and logged in? Separate from
+    `/healthz` (which only says the watcher process itself is up) - a
+    dead gowa session shouldn't look the same as a dead watcher."""
+    return await _client.session_status()
 
 
 async def get_channel_by_kind(kind: str) -> Channel | None:
@@ -336,11 +367,11 @@ async def link(cmd: LinkCommand, requested_by: str) -> str:
 async def handle_command(
     channel_jid: str, sender: str, text: str, vault: VaultClient | None = None
 ) -> str | None:
-    """Route a parsed command to its handler. `vault` defaults to a
-    process-local LocalDirClient rooted at ./vault for interactive/manual
-    use - pass a real client in tests and in the deployed app."""
+    """Route a parsed command to its handler. `vault` defaults to
+    `default_vault_client()` (Lapis if configured, else a local
+    directory) - pass a real client in tests."""
     cmd: Command | None = parse_command(text)
-    vault = vault or LocalDirClient(_default_vault_root())
+    vault = vault or default_vault_client()
 
     if cmd is None:
         return await continue_setup_session(channel_jid, text, vault)
@@ -353,10 +384,6 @@ async def handle_command(
     if isinstance(cmd, LinkCommand):
         return await link(cmd, sender)
     raise AssertionError(f"unhandled command type: {cmd!r}")
-
-
-def _default_vault_root() -> Path:
-    return Path(settings.vault_root)
 
 
 async def resolve_sender(wa_identity: str) -> MembersRegistry | None:
@@ -490,7 +517,7 @@ async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClie
                 existing.linked_by = confirmed_by
             reply = f"Linked to [[{member_title}]]."
         elif kind == "create_member":
-            vault = vault or LocalDirClient(_default_vault_root())
+            vault = vault or default_vault_client()
             title = data["display_name"]
             await vault.write(f"people/{slugify(title)}.md", render_new_member_page(title), base_revision="")
             session.add(
@@ -500,7 +527,7 @@ async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClie
             )
             reply = f"Created [[{title}]] and linked."
         elif kind == "wiki_write":
-            vault = vault or LocalDirClient(_default_vault_root())
+            vault = vault or default_vault_client()
             path, section, line = data["path"], data["section"], data["line"]
             read_result = await vault.read(path)
             page = append_to_section(parse_page(read_result.content), section, [line])

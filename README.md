@@ -32,8 +32,10 @@ agents/
   research-agent/    FROZEN - see ADR-0010
 skills/            SKILL.md prompt bundles for the Worker/Mentor models
 tests/             pytest suite; tests/fake_gowa/ is the Seam-1 test double
-scripts/           operator/one-off scripts (worker model benchmark)
-docs/              Spec, Plan, ADRs, Wiki Format, Operations
+scripts/           operator scripts (add_bot_admin, worker model benchmark)
+docs/              Spec, Plan, ADRs, Wiki Format, Operations, Architecture
+main.py            composition root - wires agents into the Scheduler,
+                   the Chat Agent into the Gateway, runs the app + tick loop
 ```
 
 `AGENTS.md` has the module-boundary rules (each package's `interface.py`
@@ -50,6 +52,7 @@ uv run ruff check .
 uv run mypy shared
 uv run mypy agents/wa_agent
 uv run mypy agents/project_agent
+uv run mypy main.py
 ```
 
 Everything in `tests/` runs against `tests/fake_gowa/` (a gowa test
@@ -61,25 +64,26 @@ Testing Decisions' Seam 1. No API keys, no live WhatsApp, no live wiki.
 1. `cp .env.example .env` and fill in `GOWA_BASIC_AUTH`,
    `GOWA_WEBHOOK_SECRET` (any random string), and `MODELS_API_KEY` (an
    OpenRouter key or any OpenAI-compatible provider) once you have one.
-   Everything else has a sane default - see `.env.example` for what
-   each setting does.
-2. `docker compose up -d --build`.
+   No Jev access? Leave `JEV_BASE_URL` empty - `main.py` falls back to
+   `WorkerBackedDecisionModel`, a real (if slower/pricier) implementation
+   that answers every Decision Model question with the Worker model
+   instead. Everything else has a sane default - see `.env.example`.
+2. `docker compose up -d --build`. This runs `main.py`, not raw
+   `uvicorn` - it wires the batch cutter, Chat Agent, Project Agent and
+   lifecycle jobs into the Scheduler and starts a tick loop, in addition
+   to serving the FastAPI app.
 3. Scan the WhatsApp QR at `http://<host>:3000/app/login` with the
    dedicated number.
-4. `curl http://<host>:8000/healthz` should return `{"ok": true}`.
-5. As a Bot Admin (see `bot_admins` table / seed one via the DB until
-   `/setup admin` exists), message an allowlisted-to-be group with
-   `/setup other` to confirm the webhook path, then `/setup project
-   <Title>` for a real project - see [`docs/Operations.md`](docs/Operations.md)
-   for the full deploy/re-login/rotation/backup runbook.
-
-Wiring the batch cutter, Chat Agent, and Project Agent into the
-Scheduler as recurring jobs (rather than calling them by hand) is the
-one piece of "glue" left for whoever deploys this for real - the
-functions themselves (`agents/wa_agent/interface.py`'s `run_batch`,
-`agents/project_agent/interface.py`'s `run_project_agent_once`, etc.)
-are all built and tested; `shared/scheduler/interface.py`'s `register()`
-is what a small `main.py` would call for each of them at startup.
+4. `curl http://<host>:8000/healthz` should return `{"ok": true}`; check
+   gowa/Lapis reachability separately with `check_gowa_connection()` /
+   `check_vault_connection()` (see [`docs/Operations.md`](docs/Operations.md#health-checks)).
+5. Bootstrap yourself as a Bot Admin - `bot_admins` starts empty, and
+   every command needs a row there:
+   `docker compose exec watcher uv run python scripts/add_bot_admin.py "<your-wa-jid>"`.
+6. Message an allowlisted-to-be group with `/setup other` to confirm the
+   webhook path, then `/setup project <Title>` for a real project - see
+   [`docs/Operations.md`](docs/Operations.md) for the full deploy/
+   re-login/rotation/backup runbook.
 
 ### Worker model benchmark (Phase 6)
 

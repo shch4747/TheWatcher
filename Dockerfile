@@ -8,7 +8,8 @@ RUN uv sync --no-dev --no-install-project
 
 COPY shared ./shared
 COPY agents ./agents
+COPY main.py ./main.py
 RUN uv sync --no-dev
 
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "shared.gateway.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "python", "main.py"]

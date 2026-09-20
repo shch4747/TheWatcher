@@ -27,6 +27,12 @@ This is the v1 application described in `docs/Spec - Watcher v1.md` and
 - One Python application, one container (ADR-0005) — not one process per
   agent folder. `agents/*` is an ownership boundary for contributors, not
   a deployment boundary.
+- **`main.py` is the one exception**: it's the composition root, and the
+  only file allowed to import across both `agents/*` packages and
+  `shared/*` in the same place (registering jobs with the Scheduler,
+  wiring the Chat Agent as a Gateway message hook). Nothing under
+  `shared/` or `agents/` may import `main.py` back — the dependency only
+  ever points inward, from the composition root down.
 
 ## Why
 

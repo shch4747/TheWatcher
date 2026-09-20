@@ -4,9 +4,10 @@ and tests run against recorded fixtures (Testing Decisions) - no live
 model calls here."""
 from __future__ import annotations
 
+import pytest
 from pydantic_ai.models.test import TestModel
 from shared.db import ModelCall, get_session
-from shared.models.decision import FixtureDecisionModel
+from shared.models.decision import FixtureDecisionModel, WorkerBackedDecisionModel, default_decision_client
 from shared.models.interface import (
     ChoiceResult,
     NoulResult,
@@ -89,3 +90,36 @@ async def test_decide_with_fallback_keeps_decision_if_worker_answer_invalid():
     worker = _worker("something not in the option list")
     result = await decide_with_fallback(fixture, worker, "q3", ["new-thread", "chatter"])
     assert result.option == "new-thread"  # fell back to the Decision Model's own top pick
+
+
+async def test_worker_backed_decision_model_choice_noul_score():
+    decision = WorkerBackedDecisionModel(_worker("chatter"))
+    choice = await decision.choice("which bucket?", ["new-thread", "chatter"])
+    assert choice.option == "chatter"
+    assert choice.confidence == 1.0
+
+    yes_decision = WorkerBackedDecisionModel(_worker("Yes, that's right."))
+    noul = await yes_decision.noul("is this an approval?")
+    assert noul.answer is True
+
+    no_decision = WorkerBackedDecisionModel(_worker("No."))
+    noul_no = await no_decision.noul("is this an approval?")
+    assert noul_no.answer is False
+
+    score_decision = WorkerBackedDecisionModel(_worker("0.75"))
+    score = await score_decision.score("how urgent is this?")
+    assert score.value == 0.75
+
+
+async def test_worker_backed_decision_model_falls_back_on_invalid_choice():
+    decision = WorkerBackedDecisionModel(_worker("not one of the options"))
+    choice = await decision.choice("which bucket?", ["new-thread", "chatter"])
+    assert choice.option == "new-thread"  # first option, since the answer didn't match either
+
+
+def test_default_decision_client_picks_worker_backed_without_jev(monkeypatch: pytest.MonkeyPatch):
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "jev_base_url", None)
+    client = default_decision_client(_worker("x"))
+    assert isinstance(client, WorkerBackedDecisionModel)

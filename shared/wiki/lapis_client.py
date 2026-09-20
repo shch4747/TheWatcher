@@ -111,6 +111,33 @@ class LocalDirClient:
         )
 
 
+def default_vault_client() -> VaultClient:
+    """LapisClient if LAPIS_TOKEN is configured, else a LocalDirClient
+    rooted at VAULT_ROOT - the same live-vs-stand-in pattern as
+    `shared.cms.interface.default_cms_client()`. Safe default for a
+    fresh deploy: nothing writes to a real wiki until you explicitly
+    configure Lapis credentials."""
+    from pathlib import Path
+
+    from shared.config import settings
+
+    if settings.lapis_token:
+        return LapisClient(settings.lapis_base_url, settings.lapis_vault_id, token=settings.lapis_token)
+    return LocalDirClient(Path(settings.vault_root))
+
+
+async def check_vault_connection(vault: VaultClient) -> dict:
+    """Health check: can we actually reach and list the vault? A
+    `LocalDirClient` always succeeds if its root directory exists;
+    a `LapisClient` proves it can reach Lapis and list something,
+    without requiring any specific file to exist."""
+    try:
+        paths = await vault.list("")
+        return {"ok": True, "path_count": len(paths)}
+    except Exception as e:  # noqa: BLE001 - health probe, never raises
+        return {"ok": False, "error": str(e)}
+
+
 class LapisClient:
     """Live client over the Lapis HTTP API."""
 

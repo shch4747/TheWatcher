@@ -27,6 +27,8 @@ from shared.wiki.lapis_client import (
     ReadResult,
     VaultClient,
     WriteResult,
+    check_vault_connection,
+    default_vault_client,
 )
 from shared.wiki.lint import LintIssue, lint_text, render_lint_report, repair_missing_sections
 from shared.wiki.parser import Page, Section, WikiParseError, dump_page, parse_page, parse_page_lenient
@@ -61,6 +63,8 @@ __all__ = [
     "ReadResult",
     "VaultClient",
     "WriteResult",
+    "check_vault_connection",
+    "default_vault_client",
     "LintIssue",
     "lint_text",
     "render_lint_report",
