@@ -16,6 +16,7 @@ from shared.gateway import interface as gateway
 from shared.gateway.app import app as gateway_app
 
 from tests.fake_gowa.app import app as fake_gowa_app
+from tests.gowa_payloads import message_event
 
 
 def _sign(body: bytes) -> str:
@@ -53,14 +54,12 @@ async def test_hook_fires_for_regular_message(client: httpx.AsyncClient):
     seen = []
 
     async def hook(payload: dict, channel: str) -> None:
-        seen.append((payload["message"]["text"], channel))
+        seen.append((payload["payload"]["body"], channel))
 
     gateway.register_message_hook(hook)
     await _allowlist("hook-chan-1@g.us")
 
-    body = json.dumps(
-        {"event": "message", "from": "hook-chan-1@g.us", "message": {"id": "hk1", "text": "hello"}}
-    ).encode()
+    body = json.dumps(message_event("hk1", "hook-chan-1@g.us", "hello")).encode()
     async with client as c:
         await c.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
 
@@ -79,12 +78,7 @@ async def test_hook_does_not_fire_for_admin_command(client: httpx.AsyncClient):
         await session.commit()
 
     body = json.dumps(
-        {
-            "event": "message",
-            "from": "hook-chan-cmd@g.us",
-            "sender": "admin@hook",
-            "message": {"id": "hk2", "text": "/status"},
-        }
+        message_event("hk2", "hook-chan-cmd@g.us", "/status", sender="admin@hook")
     ).encode()
     async with client as c:
         await c.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
@@ -101,9 +95,7 @@ async def test_hook_does_not_fire_for_duplicate_message(client: httpx.AsyncClien
     gateway.register_message_hook(hook)
     await _allowlist("hook-chan-dup@g.us")
 
-    body = json.dumps(
-        {"event": "message", "from": "hook-chan-dup@g.us", "message": {"id": "hk3", "text": "hi"}}
-    ).encode()
+    body = json.dumps(message_event("hk3", "hook-chan-dup@g.us", "hi")).encode()
     headers = {"X-Hub-Signature-256": _sign(body)}
     async with client as c:
         await c.post("/webhook/gowa", content=body, headers=headers)
@@ -119,9 +111,7 @@ async def test_broken_hook_does_not_break_webhook_intake(client: httpx.AsyncClie
     gateway.register_message_hook(broken_hook)
     await _allowlist("hook-chan-broken@g.us")
 
-    body = json.dumps(
-        {"event": "message", "from": "hook-chan-broken@g.us", "message": {"id": "hk4", "text": "hi"}}
-    ).encode()
+    body = json.dumps(message_event("hk4", "hook-chan-broken@g.us", "hi")).encode()
     async with client as c:
         resp = await c.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
 

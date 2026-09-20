@@ -14,6 +14,7 @@ from shared.gateway.app import app as gateway_app
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
+from tests.gowa_payloads import reaction_event
 
 ADMIN = "919999911111@s.whatsapp.net"
 
@@ -62,7 +63,7 @@ async def _make_pending_proposal(channel: str, message_id: str) -> int:
 
 async def test_thumbs_up_from_admin_confirms_the_proposal():
     proposal_id = await _make_pending_proposal("chan-1", "wamid.PROP1")
-    reply = await gateway.handle_reaction(ADMIN, {"message_id": "wamid.PROP1", "emoji": "\U0001f44d"})
+    reply = await gateway.handle_reaction(ADMIN, "wamid.PROP1", "\U0001f44d")
     assert reply is not None
     assert "Linked" in reply
 
@@ -75,8 +76,7 @@ async def test_thumbs_up_from_admin_confirms_the_proposal():
 
 async def test_thumbs_up_from_non_admin_is_ignored():
     await _make_pending_proposal("chan-2", "wamid.PROP2")
-    reaction = {"message_id": "wamid.PROP2", "emoji": "\U0001f44d"}
-    reply = await gateway.handle_reaction("random@nobody", reaction)
+    reply = await gateway.handle_reaction("random@nobody", "wamid.PROP2", "\U0001f44d")
     assert reply is None
 
     async with get_session() as session:
@@ -86,7 +86,7 @@ async def test_thumbs_up_from_non_admin_is_ignored():
 
 async def test_other_emoji_reaction_does_nothing():
     await _make_pending_proposal("chan-3", "wamid.PROP3")
-    reply = await gateway.handle_reaction(ADMIN, {"message_id": "wamid.PROP3", "emoji": "\U0001f602"})
+    reply = await gateway.handle_reaction(ADMIN, "wamid.PROP3", "\U0001f602")
     assert reply is None
 
 
@@ -142,8 +142,8 @@ async def test_get_message_and_get_messages_and_get_context():
 async def test_request_history_backfills_and_flags_source():
     channel = "backfill-chan@g.us"
     fake_gowa_app.state.chat_history[channel] = [
-        {"id": "hist-1", "text": "old message 1"},
-        {"id": "hist-2", "text": "old message 2"},
+        {"id": "hist-1", "chat_jid": channel, "sender_jid": "x@s.whatsapp.net", "content": "old message 1"},
+        {"id": "hist-2", "chat_jid": channel, "sender_jid": "x@s.whatsapp.net", "content": "old message 2"},
     ]
 
     added = await gateway.request_history(channel, count=100)
@@ -154,6 +154,7 @@ async def test_request_history_backfills_and_flags_source():
     rows = list(rows)
     assert len(rows) == 2
     assert all(r.event_type == "message.backfill" for r in rows)
+    assert all("old message" in r.payload for r in rows)
 
     # calling it again doesn't duplicate what's already buffered
     added_again = await gateway.request_history(channel, count=100)
@@ -175,13 +176,7 @@ async def test_webhook_reaction_event_confirms_proposal_end_to_end():
         await session.commit()
     proposal_id = await _make_pending_proposal(channel, "wamid.PROPWEBHOOK")
 
-    payload = {
-        "event": "message.reaction",
-        "id": "wamid.REACTEVENT1",
-        "from": channel,
-        "sender": ADMIN,
-        "reaction": {"message_id": "wamid.PROPWEBHOOK", "emoji": "\U0001f44d"},
-    }
+    payload = reaction_event("wamid.REACTEVENT1", channel, ADMIN, "\U0001f44d", "wamid.PROPWEBHOOK")
     body = json.dumps(payload).encode()
     transport = ASGITransport(app=gateway_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:

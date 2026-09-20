@@ -19,6 +19,7 @@ from shared.models.text import TextModelClient
 from shared.wiki.interface import LocalDirClient, parse_page
 
 from tests.fake_gowa.app import app as fake_gowa_app
+from tests.gowa_payloads import message_event
 
 
 def _thread_page(slug: str, state: str, last_message_at: str, extra_sections: str = "") -> str:
@@ -104,7 +105,9 @@ async def test_stale_thread_is_revived_by_a_new_message(
                 message_id="rev-m0",
                 channel="revive-chan@g.us",
                 event_type="message",
-                payload=json.dumps({"message": {"id": "rev-m0", "text": "reviving this"}, "sender": "x"}),
+                payload=json.dumps(
+                    message_event("rev-m0", "revive-chan@g.us", "reviving this", sender="x")
+                ),
             )
         )
         await session.commit()

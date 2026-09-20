@@ -18,6 +18,8 @@ from shared.models.text import TextModelClient
 from shared.wiki.interface import LocalDirClient, parse_page
 from sqlalchemy import select
 
+from tests.gowa_payloads import message_event
+
 CHANNEL_JID = "999-thread-test@g.us"
 
 
@@ -70,7 +72,7 @@ async def _seed_messages(jid: str, texts: list[str]) -> list[str]:
                     message_id=message_id,
                     channel=jid,
                     event_type="message",
-                    payload=json.dumps({"message": {"id": message_id, "text": text}, "sender": "sender@x"}),
+                    payload=json.dumps(message_event(message_id, jid, text, sender="sender@x")),
                 )
             )
         await session.commit()

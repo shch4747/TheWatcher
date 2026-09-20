@@ -15,7 +15,13 @@ from pathlib import Path
 
 from shared.config import settings
 from shared.db import Channel, MessageBuffer, Notice, OutboundLog, aware_utc, get_session
-from shared.gateway.interface import get_channel_by_kind, list_channels, propose_wiki_write, resolve_sender
+from shared.gateway.interface import (
+    get_channel_by_kind,
+    list_channels,
+    parse_gowa_event,
+    propose_wiki_write,
+    resolve_sender,
+)
 from shared.gateway.interface import send as gateway_send
 from shared.models.decision import DecisionModelProtocol
 from shared.models.interface import decide_with_fallback, generate
@@ -38,12 +44,12 @@ NEW_THREAD = "new-thread"
 
 
 def _extract_message(payload: dict) -> dict:
-    msg = payload.get("message", {})
+    event = parse_gowa_event(payload)
     return {
-        "id": msg.get("id") or payload.get("id"),
-        "text": msg.get("text", ""),
-        "sender": payload.get("sender") or msg.get("sender") or "unknown",
-        "timestamp": msg.get("timestamp") or payload.get("timestamp"),
+        "id": event.message_id,
+        "text": event.text,
+        "sender": event.sender or "unknown",
+        "timestamp": event.timestamp,
     }
 
 
@@ -543,7 +549,7 @@ async def handle_chat_message(
     fields = _extract_message(payload)
     text = fields["text"]
     message_id = fields["id"]
-    quoted_id = payload.get("message", {}).get("replied_to_id")
+    quoted_id = parse_gowa_event(payload).replied_to_id
 
     mentioned = is_bot_mention(text)
     replying_to_bot = await is_reply_to_bot(quoted_id)

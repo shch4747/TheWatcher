@@ -21,6 +21,7 @@ from shared.wiki.interface import LocalDirClient
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
+from tests.gowa_payloads import message_event
 
 ADMIN = "919999999999@s.whatsapp.net"
 PROJECT_GROUP = "111-aaa@g.us"
@@ -152,12 +153,7 @@ def gateway_client():
 
 
 async def test_dm_is_filtered_at_the_edge_even_from_admin(gateway_client):
-    payload = {
-        "event": "message",
-        "from": ADMIN,  # a DM jid, not a group
-        "sender": ADMIN,
-        "message": {"id": "wamid.DM1", "text": "/status"},
-    }
+    payload = message_event("wamid.DM1", ADMIN, "/status", sender=ADMIN)  # a DM jid, not a group
     body = json.dumps(payload).encode()
     async with gateway_client as client:
         resp = await client.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
@@ -165,11 +161,7 @@ async def test_dm_is_filtered_at_the_edge_even_from_admin(gateway_client):
 
 
 async def test_non_allowlisted_group_is_filtered_unless_admin_command(gateway_client):
-    payload = {
-        "event": "message",
-        "from": "999-unallowlisted@g.us",
-        "message": {"id": "wamid.NOTALLOWED", "text": "just chatting"},
-    }
+    payload = message_event("wamid.NOTALLOWED", "999-unallowlisted@g.us", "just chatting")
     body = json.dumps(payload).encode()
     async with gateway_client as client:
         resp = await client.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
@@ -177,12 +169,7 @@ async def test_non_allowlisted_group_is_filtered_unless_admin_command(gateway_cl
 
 
 async def test_admin_command_passes_edge_filter_before_allowlisting(gateway_client):
-    payload = {
-        "event": "message",
-        "from": "999-unallowlisted@g.us",
-        "sender": ADMIN,
-        "message": {"id": "wamid.SETUPCMD", "text": "/setup other"},
-    }
+    payload = message_event("wamid.SETUPCMD", "999-unallowlisted@g.us", "/setup other", sender=ADMIN)
     body = json.dumps(payload).encode()
     async with gateway_client as client:
         resp = await client.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
@@ -195,12 +182,8 @@ async def test_edit_of_unprocessed_message_updates_buffer_in_place(gateway_clien
         session.add(Channel(jid=channel, kind="project"))
         await session.commit()
 
-    original = json.dumps(
-        {"event": "message", "from": channel, "message": {"id": "wamid.EDIT1", "text": "orig"}}
-    ).encode()
-    edited = json.dumps(
-        {"event": "message.edited", "from": channel, "message": {"id": "wamid.EDIT1", "text": "edited!"}}
-    ).encode()
+    original = json.dumps(message_event("wamid.EDIT1", channel, "orig")).encode()
+    edited = json.dumps(message_event("wamid.EDIT1", channel, "edited!", event="message.edited")).encode()
     async with gateway_client as client:
         headers1 = {"X-Hub-Signature-256": _sign(original)}
         await client.post("/webhook/gowa", content=original, headers=headers1)

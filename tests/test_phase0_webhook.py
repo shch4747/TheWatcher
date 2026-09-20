@@ -16,6 +16,7 @@ from shared.gateway.app import app as gateway_app
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
+from tests.gowa_payloads import message_event
 
 
 async def _allowlist(jid: str, kind: str = "project") -> None:
@@ -25,7 +26,8 @@ async def _allowlist(jid: str, kind: str = "project") -> None:
 
 
 def _sign(body: bytes) -> str:
-    return hmac.new(settings.gowa_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    digest = hmac.new(settings.gowa_webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
 
 
 @pytest.fixture(autouse=True)
@@ -53,11 +55,7 @@ def _wire_fake_gowa(monkeypatch):
 
 async def test_webhook_lands_in_buffer(gateway_client):
     await _allowlist("123456789-987654321@g.us")
-    payload = {
-        "event": "message",
-        "from": "123456789-987654321@g.us",
-        "message": {"id": "wamid.TESTMSG1", "text": "hello watcher"},
-    }
+    payload = message_event("wamid.TESTMSG1", "123456789-987654321@g.us", "hello watcher")
     body = json.dumps(payload).encode()
 
     async with gateway_client as client:
@@ -87,7 +85,7 @@ async def test_webhook_rejects_bad_signature(gateway_client):
 
 async def test_webhook_dedupes_by_message_id(gateway_client):
     await _allowlist("111-222@g.us")
-    payload = {"event": "message", "from": "111-222@g.us", "message": {"id": "wamid.DUP"}}
+    payload = message_event("wamid.DUP", "111-222@g.us")
     body = json.dumps(payload).encode()
     headers = {"X-Hub-Signature-256": _sign(body)}
     async with gateway_client as client:

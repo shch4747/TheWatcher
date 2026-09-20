@@ -39,6 +39,8 @@ from shared.gateway.commands import (
     is_group_jid,
     parse_command,
 )
+from shared.gateway.events import GowaEvent as GowaEvent  # re-exported for agents/wa_agent
+from shared.gateway.events import parse_gowa_event, wrap_backfilled_message
 from shared.gateway.gowa_client import GowaClient
 from shared.wiki.interface import (
     VaultClient,
@@ -83,14 +85,20 @@ def verify_signature(body: bytes, signature: str | None) -> bool:
     """HMAC-SHA256 over the raw body, checked against the current secret
     and, during a rotation window, the previous one too - so updating
     gowa's webhook secret doesn't have to happen in the same instant as
-    updating ours (security pass: webhook secret rotation)."""
+    updating ours (security pass: webhook secret rotation).
+
+    gowa sends the header as `sha256={hex}`, not a bare hex digest (see
+    docs/webhook-payload.md in the gowa repo) - the prefix must be
+    stripped before comparing.
+    """
     if not signature:
         return False
+    received = signature.removeprefix("sha256=")
     secrets = [settings.gowa_webhook_secret]
     if settings.gowa_webhook_secret_previous:
         secrets.append(settings.gowa_webhook_secret_previous)
     return any(
-        hmac.compare_digest(hmac.new(s.encode(), body, hashlib.sha256).hexdigest(), signature)
+        hmac.compare_digest(hmac.new(s.encode(), body, hashlib.sha256).hexdigest(), received)
         for s in secrets
         if s
     )
@@ -123,11 +131,12 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
         return False
 
     payload = json.loads(raw_body)
-    message_id = payload.get("message", {}).get("id") or payload.get("id")
-    channel = payload.get("from") or payload.get("chat_id") or "unknown"
-    event_type = payload.get("event", "message")
-    sender = payload.get("sender") or payload.get("message", {}).get("sender")
-    text = payload.get("message", {}).get("text", "")
+    event = parse_gowa_event(payload)
+    message_id = event.message_id
+    channel = event.chat_id or "unknown"
+    event_type = event.event_type
+    sender = event.sender
+    text = event.text
     if not message_id:
         return False
 
@@ -162,6 +171,7 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
     if is_admin_command:
         # commands are deterministic and act immediately - they don't wait
         # for a batch (Spec: Gateway commands).
+        assert sender is not None  # implied by is_admin_command being True
         reply = await handle_command(channel, sender, text)
         if reply:
             await send(channel, reply)
@@ -171,7 +181,7 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
                 row.processed = True
                 await session.commit()
     elif event_type == "message.reaction" and sender:
-        await handle_reaction(sender, payload.get("reaction", {}))
+        await handle_reaction(sender, event.reacted_message_id, event.reaction_emoji)
     elif event_type == "message":
         for hook in _message_hooks:
             try:
@@ -547,7 +557,7 @@ async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClie
 _THUMBS_UP = {"\U0001f44d", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿"}
 
 
-async def handle_reaction(reactor: str, reaction: dict) -> str | None:
+async def handle_reaction(reactor: str, message_id: str | None, emoji: str | None) -> str | None:
     """A 👍 from a Bot Admin within 24h executes the reacted-to Proposal
     (Spec: Chat Agent Proposal flow, reused for identity link proposals).
     Distinguishing the initiative lead from a Bot Admin needs the wiki's
@@ -555,8 +565,6 @@ async def handle_reaction(reactor: str, reaction: dict) -> str | None:
     can confirm via reaction for now; lead-confirmation lands with the
     Phase 5 Chat Agent ticket that already depends on this one.
     """
-    emoji = reaction.get("emoji", "")
-    message_id = reaction.get("message_id")
     if not message_id or emoji not in _THUMBS_UP:
         return None
     if not await is_bot_admin(reactor):
@@ -593,13 +601,22 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+def _unwrap_stored_payload(raw: dict) -> dict:
+    """Buffered rows store the full gowa event envelope
+    (`{"event", "payload": {...}}`); callers asking for "the message"
+    want the inner fields, not the envelope. Falls back to the raw dict
+    unchanged if there's no "payload" key (e.g. a hand-built test row)."""
+    inner = raw.get("payload")
+    return inner if isinstance(inner, dict) else raw
+
+
 async def get_message(message_id: str) -> dict | None:
     """Resolve a message by id from what the Gateway has already buffered
     (ADR-0002: gowa is the raw source of truth; the buffer is our cache of
     everything we've ingested)."""
     async with get_session() as session:
         row = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == message_id))
-    return json.loads(row.payload) if row else None
+    return _unwrap_stored_payload(json.loads(row.payload)) if row else None
 
 
 async def get_messages(channel: str, since_id: str | None = None, limit: int = 100) -> list[dict]:
@@ -612,7 +629,7 @@ async def get_messages(channel: str, since_id: str | None = None, limit: int = 1
                 stmt = stmt.where(MessageBuffer.id > anchor)
         stmt = stmt.order_by(MessageBuffer.id).limit(limit)
         rows = await session.scalars(stmt)
-    return [json.loads(r.payload) for r in rows]
+    return [_unwrap_stored_payload(json.loads(r.payload)) for r in rows]
 
 
 async def get_context(message_id: str, before: int = 5, after: int = 5) -> list[dict]:
@@ -634,7 +651,7 @@ async def get_context(message_id: str, before: int = 5, after: int = 5) -> list[
             .limit(after)
         )
     ordered = list(reversed(list(before_rows))) + [target] + list(after_rows)
-    return [json.loads(r.payload) for r in ordered]
+    return [_unwrap_stored_payload(json.loads(r.payload)) for r in ordered]
 
 
 async def request_history(channel: str, count: int) -> int:
@@ -644,7 +661,8 @@ async def request_history(channel: str, count: int) -> int:
     messages = await _client.get_chat_messages(channel, limit=count)
     added = 0
     for m in messages:
-        message_id = m.get("id")
+        wrapped = wrap_backfilled_message(m)
+        message_id = wrapped["payload"]["id"]
         if not message_id:
             continue
         async with get_session() as session:
@@ -658,7 +676,7 @@ async def request_history(channel: str, count: int) -> int:
                     message_id=message_id,
                     channel=channel,
                     event_type="message.backfill",
-                    payload=json.dumps(m),
+                    payload=json.dumps(wrapped),
                 )
             )
             await session.commit()

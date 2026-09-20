@@ -20,6 +20,7 @@ from shared.wiki.interface import LocalDirClient, parse_page
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
+from tests.gowa_payloads import message_event
 
 CHANNEL_JID = "chat-agent-chan@g.us"
 
@@ -72,10 +73,7 @@ THREAD_PAGE = (
 
 
 def _message_payload(text: str, message_id: str, replied_to: str | None = None) -> dict:
-    msg = {"id": message_id, "text": text}
-    if replied_to:
-        msg["replied_to_id"] = replied_to
-    return {"event": "message", "from": CHANNEL_JID, "sender": "member@x", "message": msg}
+    return message_event(message_id, CHANNEL_JID, text, sender="member@x", replied_to_id=replied_to)
 
 
 async def test_non_addressed_message_is_ignored(vault: LocalDirClient):
@@ -108,12 +106,9 @@ async def test_reply_to_bot_message_also_triggers(vault: LocalDirClient):
         session.add(OutboundLog(channel="reply-trigger-chan@g.us", text="watching", message_id="bot-msg-1"))
         await session.commit()
 
-    payload = {
-        "event": "message",
-        "from": "reply-trigger-chan@g.us",
-        "sender": "member@x",
-        "message": {"id": "q2", "text": "and when is it due?", "replied_to_id": "bot-msg-1"},
-    }
+    payload = message_event(
+        "q2", "reply-trigger-chan@g.us", "and when is it due?", sender="member@x", replied_to_id="bot-msg-1"
+    )
     reply = await wa_agent.handle_chat_message(
         payload, "reply-trigger-chan@g.us", vault, FixtureDecisionModel(), EchoWorker()
     )
@@ -127,8 +122,9 @@ async def test_write_request_produces_a_proposal_not_a_direct_write(vault: Local
     )
     await vault.write(f"channels/{channel_dir}/demo-date.md", thread_page, base_revision="")
 
-    payload = _message_payload("@watcher note the demo moved to Friday", "w1")
-    payload["from"] = "write-req-chan@g.us"
+    payload = message_event(
+        "w1", "write-req-chan@g.us", "@watcher note the demo moved to Friday", sender="member@x"
+    )
 
     before = (await vault.read(f"channels/{channel_dir}/demo-date.md")).content
     reply = await wa_agent.handle_chat_message(

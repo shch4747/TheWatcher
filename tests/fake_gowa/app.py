@@ -28,9 +28,16 @@ async def react(message_id: str, request: Request) -> dict:
 
 
 @app.get("/chat/{jid}/messages")
-async def chat_messages(jid: str, limit: int = 100, before: str | None = None) -> dict:
+async def chat_messages(jid: str, limit: int = 100, offset: int = 0) -> dict:
     history = app.state.chat_history.get(jid, [])
-    return {"results": history[-limit:]}
+    page = history[offset : offset + limit]
+    return {
+        "results": {
+            "data": page,
+            "pagination": {"limit": limit, "offset": offset, "total": len(history)},
+            "chat_info": {},
+        }
+    }
 
 
 @app.get("/app/devices")

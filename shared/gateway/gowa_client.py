@@ -2,10 +2,12 @@
 The Gateway's ONLY outbound path to WhatsApp (ADR-0001) — nothing else in the
 app talks to gowa directly.
 
-Endpoints used:
+Endpoints used (verified against
+https://github.com/aldinokemal/go-whatsapp-web-multidevice/blob/main/docs/openapi.yaml,
+2026-09-20):
   POST /send/message               body: {phone, message, reply_message_id?}
   POST /message/{id}/reaction      body: {phone, emoji}
-  GET  /chat/{jid}/messages        ?limit=&before= -> history backfill
+  GET  /chat/{jid}/messages        ?limit=&offset= -> history backfill
   GET  /app/devices                -> connected device status
 
 Group vs DM addressing is just the `phone` value:
@@ -84,17 +86,17 @@ class GowaClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def get_chat_messages(self, jid: str, limit: int = 100, before: str | None = None) -> list[dict]:
-        """Fetch stored history for backfill (Spec: request_history)."""
-        params: dict[str, str | int] = {"limit": limit}
-        if before:
-            params["before"] = before
+    async def get_chat_messages(self, jid: str, limit: int = 100, offset: int = 0) -> list[dict]:
+        """Fetch stored history for backfill (Spec: request_history).
+        Response is {"results": {"data": [...ChatMessage], "pagination":
+        {...}, "chat_info": {...}}} - callers get just the message list."""
+        params: dict[str, str | int] = {"limit": min(limit, 100), "offset": offset}
         resp = await self._client.get(
             f"{self.base_url}/chat/{jid}/messages", params=params, headers=self._headers()
         )
         resp.raise_for_status()
-        data = resp.json()
-        return data.get("results", data) if isinstance(data, dict) else data
+        results = resp.json().get("results", {})
+        return results.get("data", [])
 
     async def session_status(self) -> dict:
         try:

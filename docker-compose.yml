@@ -1,6 +1,6 @@
 services:
   gowa:
-    image: aldinokemal/go-whatsapp-web-multidevice:latest
+    image: aldinokemal2104/go-whatsapp-web-multidevice:latest
     restart: unless-stopped
     ports:
       - "3000:3000"
