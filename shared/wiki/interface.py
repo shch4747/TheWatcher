@@ -28,6 +28,12 @@ from shared.wiki.lapis_client import (
 from shared.wiki.lint import LintIssue, lint_text, render_lint_report, repair_missing_sections
 from shared.wiki.parser import Page, Section, WikiParseError, dump_page, parse_page, parse_page_lenient
 from shared.wiki.schema import SCHEMA_BY_TYPE, Frontmatter, canonical_section_title, owner_of
+from shared.wiki.templates import (
+    render_new_channel_page,
+    render_new_event_page,
+    render_new_project_page,
+    slugify,
+)
 
 __all__ = [
     "Item",
@@ -60,4 +66,8 @@ __all__ = [
     "render_members_index",
     "render_readme",
     "set_derived_section",
+    "render_new_channel_page",
+    "render_new_event_page",
+    "render_new_project_page",
+    "slugify",
 ]

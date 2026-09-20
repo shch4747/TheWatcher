@@ -11,11 +11,17 @@ import pytest
 from httpx import ASGITransport
 from shared import gateway
 from shared.config import settings
-from shared.db import MessageBuffer, OutboundLog, get_session, init_db
+from shared.db import Channel, MessageBuffer, OutboundLog, get_session, init_db
 from shared.gateway.app import app as gateway_app
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
+
+
+async def _allowlist(jid: str, kind: str = "project") -> None:
+    async with get_session() as session:
+        session.add(Channel(jid=jid, kind=kind))
+        await session.commit()
 
 
 def _sign(body: bytes) -> str:
@@ -46,6 +52,7 @@ def _wire_fake_gowa(monkeypatch):
 
 
 async def test_webhook_lands_in_buffer(gateway_client):
+    await _allowlist("123456789-987654321@g.us")
     payload = {
         "event": "message",
         "from": "123456789-987654321@g.us",
@@ -79,7 +86,8 @@ async def test_webhook_rejects_bad_signature(gateway_client):
 
 
 async def test_webhook_dedupes_by_message_id(gateway_client):
-    payload = {"event": "message", "from": "chan", "message": {"id": "wamid.DUP"}}
+    await _allowlist("111-222@g.us")
+    payload = {"event": "message", "from": "111-222@g.us", "message": {"id": "wamid.DUP"}}
     body = json.dumps(payload).encode()
     headers = {"X-Hub-Signature-256": _sign(body)}
     async with gateway_client as client:

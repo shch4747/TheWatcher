@@ -45,8 +45,50 @@ class Channel(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     jid: Mapped[str] = mapped_column(String, unique=True, index=True)
     kind: Mapped[str] = mapped_column(String, default="unset")
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
     initiative: Mapped[str | None] = mapped_column(String, nullable=True)
     cursor: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class BotAdmin(Base):
+    """Bot Admins can /setup before a channel is allowlisted (Spec: Gateway
+    edge filtering lets admin commands through pre-allowlist)."""
+
+    __tablename__ = "bot_admins"
+
+    wa_identity: Mapped[str] = mapped_column(String, primary_key=True)
+
+
+class SetupSession(Base):
+    """A `/setup project <Title>` dialogue in progress when the initiative
+    page doesn't exist yet (Spec: Gateway "opens a setup_session that asks
+    for lead, brief, timeline in chat")."""
+
+    __tablename__ = "setup_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel: Mapped[str] = mapped_column(String, index=True)
+    kind: Mapped[str] = mapped_column(String)  # project | event
+    title: Mapped[str] = mapped_column(String)
+    requested_by: Mapped[str] = mapped_column(String)
+    step: Mapped[str] = mapped_column(String, default="lead")  # lead -> brief -> timeline -> done
+    lead: Mapped[str | None] = mapped_column(String, nullable=True)
+    brief: Mapped[str | None] = mapped_column(String, nullable=True)
+    timeline: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class MembersRegistry(Base):
+    """WhatsApp identity <-> wiki member title (ADR-0009: CMS holds the
+    rest). Admin `/link` writes here directly; fuzzy-match auto-linking
+    (Phase 2's other ticket) goes through a Proposal first."""
+
+    __tablename__ = "members_registry"
+
+    wa_identity: Mapped[str] = mapped_column(String, primary_key=True)
+    member_title: Mapped[str] = mapped_column(String)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    linked_by: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class OutboundLog(Base):

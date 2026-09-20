@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     wa_send_min_gap_s: float = 4.0
 
     database_url: str = "sqlite+aiosqlite:///./watcher.db"
+    vault_root: str = "./vault"
 
 
 settings = Settings()
