@@ -11,6 +11,7 @@ from shared.config import settings
 from shared.db import ModelCall, get_session
 from shared.models.decision import DecisionModelProtocol, FixtureDecisionModel, JevClient
 from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult, TextResult
+from shared.models.skill_loader import Skill, load_skills, load_skills_from_dir, parse_skill_md
 from shared.models.text import TextModelClient, mentor_model, worker_model
 
 
@@ -80,4 +81,8 @@ __all__ = [
     "log_model_call",
     "generate",
     "decide_with_fallback",
+    "Skill",
+    "load_skills",
+    "load_skills_from_dir",
+    "parse_skill_md",
 ]
