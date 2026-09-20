@@ -1,0 +1,33 @@
+services:
+  gowa:
+    image: aldinokemal/go-whatsapp-web-multidevice:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      APP_BASIC_AUTH: ${GOWA_BASIC_AUTH:-}
+      WHATSAPP_WEBHOOK: http://watcher:8000/webhook/gowa
+      WHATSAPP_WEBHOOK_SECRET: ${GOWA_WEBHOOK_SECRET:-dev-secret}
+      WHATSAPP_WEBHOOK_EVENTS: message,message.reaction,message.edited,message.revoked,group.joined,group.participants
+      WHATSAPP_AUTO_DOWNLOAD_MEDIA: "false"
+    volumes:
+      - gowa-storage:/app/storages
+
+  watcher:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      GOWA_BASE_URL: http://gowa:3000
+      GOWA_BASIC_AUTH: ${GOWA_BASIC_AUTH:-}
+      GOWA_WEBHOOK_SECRET: ${GOWA_WEBHOOK_SECRET:-dev-secret}
+      DATABASE_URL: sqlite+aiosqlite:////data/watcher.db
+    volumes:
+      - watcher-data:/data
+    depends_on:
+      - gowa
+
+volumes:
+  gowa-storage:
+  watcher-data:
