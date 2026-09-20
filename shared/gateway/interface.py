@@ -31,8 +31,10 @@ from shared.db import (
     get_session,
 )
 from shared.gateway.commands import (
+    ChannelsCommand,
     Command,
     HealthCommand,
+    IngestCommand,
     LinkCommand,
     SetupCommand,
     StatusCommand,
@@ -43,7 +45,7 @@ from shared.gateway.commands import (
 from shared.gateway.events import GowaEvent as GowaEvent  # re-exported for agents/wa_agent
 from shared.gateway.events import parse_gowa_event, wrap_backfilled_message
 from shared.gateway.gowa_client import GowaClient
-from shared.scheduler.interface import due_jobs
+from shared.scheduler.interface import due_jobs, run_job
 from shared.wiki.interface import (
     LapisClient,
     VaultClient,
@@ -353,17 +355,22 @@ async def continue_setup_session(channel_jid: str, reply_text: str, vault: Vault
     return f'"{title}" created (timeline: {timeline}). watching'
 
 
-async def unwatch(channel_jid: str, requested_by: str) -> str:
+async def unwatch(channel_jid: str, requested_by: str, target_jid: str | None = None) -> str:
+    """`/unwatch` (no args) stops watching the channel it's sent from;
+    `/unwatch <jid>` (jid from `/channels`) lets a Bot Admin remove a
+    channel from any allowlisted-or-not group they can reach, without
+    needing to be a member of the channel being removed."""
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /unwatch."
+    target = target_jid or channel_jid
     async with get_session() as session:
-        channel = await session.scalar(select(Channel).where(Channel.jid == channel_jid))
-        if channel is None:
-            return "This channel wasn't being watched."
+        channel = await session.scalar(select(Channel).where(Channel.jid == target))
+        if channel is None or channel.kind == "unset":
+            return f"{target} wasn't being watched." if target_jid else "This channel wasn't being watched."
         channel.kind = "unset"
         channel.initiative = None
         await session.commit()
-    return "No longer watching this channel."
+    return f"No longer watching {target}." if target_jid else "No longer watching this channel."
 
 
 async def status(channel_jid: str) -> str:
@@ -371,6 +378,40 @@ async def status(channel_jid: str) -> str:
     if channel is None or channel.kind == "unset":
         return "Not watching this channel."
     return f"kind={channel.kind} initiative={channel.initiative or '-'} cursor={channel.cursor or '-'}"
+
+
+async def channels_report(requested_by: str) -> str:
+    """`/channels`: every currently-watched channel with its jid (needed
+    to `/unwatch <jid>` one from elsewhere) - Bot Admin only, same as
+    every other channel-management command."""
+    if not await is_bot_admin(requested_by):
+        return "Only Bot Admins can /channels."
+    channels = await list_channels()
+    if not channels:
+        return "No channels are being watched."
+    lines = [f"*Watched channels* ({len(channels)})"]
+    for channel in channels:
+        title = f" title={channel.title}" if channel.title else ""
+        initiative = f" initiative={channel.initiative}" if channel.initiative else ""
+        lines.append(f"- {channel.jid}  kind={channel.kind}{title}{initiative}")
+    return "\n".join(lines)
+
+
+async def trigger_ingest(requested_by: str) -> str:
+    """`/ingest`: run the batch-cutting ingestion job right now instead
+    of waiting for its next scheduled tick - useful right after `/setup`
+    or when testing against a live channel. Shares `ingest_tick`'s lock
+    key, so this can't run concurrently with (or duplicate) the
+    scheduled tick; it just runs it early."""
+    if not await is_bot_admin(requested_by):
+        return "Only Bot Admins can /ingest."
+    try:
+        result = await run_job("ingest_tick")
+    except KeyError:
+        return "ingest_tick isn't registered - is the app running via main.py (not just uvicorn)?"
+    if result.outcome == "success":
+        return "Ingestion triggered ✅"
+    return f"Ingestion failed: {result.error}"
 
 
 async def health() -> str:
@@ -445,13 +486,17 @@ async def handle_command(
     if isinstance(cmd, SetupCommand):
         return await setup(channel_jid, sender, cmd, vault)
     if isinstance(cmd, UnwatchCommand):
-        return await unwatch(channel_jid, sender)
+        return await unwatch(channel_jid, sender, target_jid=cmd.jid)
     if isinstance(cmd, StatusCommand):
         return await status(channel_jid)
     if isinstance(cmd, LinkCommand):
         return await link(cmd, sender)
     if isinstance(cmd, HealthCommand):
         return await health()
+    if isinstance(cmd, ChannelsCommand):
+        return await channels_report(sender)
+    if isinstance(cmd, IngestCommand):
+        return await trigger_ingest(sender)
     raise AssertionError(f"unhandled command type: {cmd!r}")
 
 

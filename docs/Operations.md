@@ -50,6 +50,27 @@ the code. See [[Spec - Watcher v1]] for what the system does and
 Nothing here needs a rebuild for config-only changes - `.env` is read at
 process start, so `docker compose up -d` after editing it is enough.
 
+## Bot Admin commands (any allowlisted-or-not group, Bot Admin only)
+
+- `/setup [project|event|coordis|exes|research|all|other] [<Title>]` -
+  register the group this is sent from as a watched channel.
+  `project`/`event` open a lead/brief/timeline dialogue if the
+  initiative page doesn't exist yet; `coordis`/`exes`/`research`/`all`
+  are singletons (a second `/setup` of the same kind is refused).
+- `/channels` - list every watched channel with its jid, kind, and
+  initiative - the jid is what `/unwatch <jid>` needs.
+- `/unwatch` - stop watching the channel this is sent from.
+  `/unwatch <jid>` - stop watching a *different* channel by jid (from
+  `/channels`), without needing to be a member of it.
+- `/status` - kind/initiative/cursor for the channel this is sent from.
+- `/ingest` - run the batch-cutting ingestion job (`ingest_tick`) right
+  now instead of waiting for its next 2-minute tick - useful right
+  after `/setup` or while testing against a live channel.
+- `/health` - gowa/vault/model connectivity plus admin/channel/proposal
+  counts, for a sanity check from your phone.
+- `/link <wa-jid> [[Member Title]]` - manually link a WhatsApp identity
+  to a Members Registry page, bypassing fuzzy-match Proposals.
+
 ## Re-login after a ban
 
 The number is disposable by design (ADR-0001 consequence: "losing the

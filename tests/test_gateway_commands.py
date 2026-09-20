@@ -17,7 +17,9 @@ from shared.db import BotAdmin, Channel, MembersRegistry, get_session
 from shared.gateway import interface as gateway
 from shared.gateway.app import app as gateway_app
 from shared.gateway.commands import (
+    ChannelsCommand,
     HealthCommand,
+    IngestCommand,
     LinkCommand,
     SetupCommand,
     StatusCommand,
@@ -71,6 +73,9 @@ def test_parse_command_recognizes_all_shapes():
         sender_ref="919876543210@s.whatsapp.net", member_ref="[[Aira]]"
     )
     assert parse_command("/health") == HealthCommand()
+    assert parse_command("/channels") == ChannelsCommand()
+    assert parse_command("/ingest") == IngestCommand()
+    assert parse_command("/unwatch 111-aaa@g.us") == UnwatchCommand(jid="111-aaa@g.us")
     assert parse_command("not a command") is None
 
 
@@ -161,6 +166,61 @@ async def test_health_command_dispatches_through_handle_command(vault: LocalDirC
     reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/health", vault)
     assert reply is not None
     assert "gowa:" in reply
+
+
+async def test_channels_lists_watched_channels_only(vault: LocalDirClient):
+    await gateway.setup(PROJECT_GROUP, ADMIN, SetupCommand(kind="other", title=None), vault)
+
+    report = await gateway.channels_report(ADMIN)
+    assert PROJECT_GROUP in report
+    assert "kind=other" in report
+
+
+async def test_channels_refuses_non_admin():
+    report = await gateway.channels_report("918888888888@s.whatsapp.net")
+    assert "only bot admins" in report.lower()
+
+
+async def test_unwatch_by_jid_from_a_different_channel(vault: LocalDirClient):
+    target = "444-remote@g.us"
+    await gateway.setup(target, ADMIN, SetupCommand(kind="other", title=None), vault)
+    assert (await gateway.status(target)) != "Not watching this channel."
+
+    reply = await gateway.unwatch("555-elsewhere@g.us", ADMIN, target_jid=target)
+    assert "no longer watching" in reply.lower()
+    assert target in reply
+    assert (await gateway.status(target)) == "Not watching this channel."
+
+
+async def test_unwatch_by_jid_for_unknown_channel():
+    reply = await gateway.unwatch("555-elsewhere@g.us", ADMIN, target_jid="999-nope@g.us")
+    assert "wasn't being watched" in reply
+
+
+async def test_channels_and_unwatch_dispatch_through_handle_command(vault: LocalDirClient):
+    group = "666-listed@g.us"
+    await gateway.setup(group, ADMIN, SetupCommand(kind="other", title=None), vault)
+
+    listed = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/channels", vault)
+    assert group in listed
+
+    removed = await gateway.handle_command(PROJECT_GROUP, ADMIN, f"/unwatch {group}", vault)
+    assert "no longer watching" in removed.lower()
+    assert (await gateway.status(group)) == "Not watching this channel."
+
+
+async def test_ingest_command_reports_unregistered_job_cleanly(vault: LocalDirClient):
+    reply = await gateway.trigger_ingest(ADMIN)
+    assert "ingest_tick" in reply
+
+    dispatched = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/ingest", vault)
+    assert dispatched is not None
+    assert "ingest_tick" in dispatched or "triggered" in dispatched.lower()
+
+
+async def test_ingest_command_refuses_non_admin():
+    reply = await gateway.trigger_ingest("918888888888@s.whatsapp.net")
+    assert "only bot admins" in reply.lower()
 
 
 async def test_link_writes_members_registry():

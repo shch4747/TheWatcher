@@ -18,11 +18,21 @@ class SetupCommand:
 
 @dataclass(frozen=True)
 class UnwatchCommand:
-    pass
+    jid: str | None = None
 
 
 @dataclass(frozen=True)
 class StatusCommand:
+    pass
+
+
+@dataclass(frozen=True)
+class ChannelsCommand:
+    pass
+
+
+@dataclass(frozen=True)
+class IngestCommand:
     pass
 
 
@@ -37,16 +47,26 @@ class HealthCommand:
     pass
 
 
-Command = SetupCommand | UnwatchCommand | StatusCommand | LinkCommand | HealthCommand
+Command = (
+    SetupCommand
+    | UnwatchCommand
+    | StatusCommand
+    | LinkCommand
+    | HealthCommand
+    | ChannelsCommand
+    | IngestCommand
+)
 
 _SETUP_RE = re.compile(
     r"^/setup(?:\s+(?P<kind>project|event|coordis|exes|research|all|other))?(?:\s+(?P<title>.+))?\s*$",
     re.IGNORECASE,
 )
-_UNWATCH_RE = re.compile(r"^/unwatch\s*$", re.IGNORECASE)
+_UNWATCH_RE = re.compile(r"^/unwatch(?:\s+(?P<jid>\S+))?\s*$", re.IGNORECASE)
 _STATUS_RE = re.compile(r"^/status\s*$", re.IGNORECASE)
 _LINK_RE = re.compile(r"^/link\s+(?P<sender>\S+)\s+(?P<member>\[\[[^\]]+\]\])\s*$", re.IGNORECASE)
 _HEALTH_RE = re.compile(r"^/health\s*$", re.IGNORECASE)
+_CHANNELS_RE = re.compile(r"^/channels\s*$", re.IGNORECASE)
+_INGEST_RE = re.compile(r"^/ingest\s*$", re.IGNORECASE)
 
 
 def parse_command(text: str) -> Command | None:
@@ -58,14 +78,18 @@ def parse_command(text: str) -> Command | None:
         kind = (m.group("kind") or "other").lower()
         title = m.group("title").strip() if m.group("title") else None
         return SetupCommand(kind=kind, title=title)
-    if _UNWATCH_RE.match(text):
-        return UnwatchCommand()
+    if m := _UNWATCH_RE.match(text):
+        return UnwatchCommand(jid=m.group("jid"))
     if _STATUS_RE.match(text):
         return StatusCommand()
     if m := _LINK_RE.match(text):
         return LinkCommand(sender_ref=m.group("sender"), member_ref=m.group("member"))
     if _HEALTH_RE.match(text):
         return HealthCommand()
+    if _CHANNELS_RE.match(text):
+        return ChannelsCommand()
+    if _INGEST_RE.match(text):
+        return IngestCommand()
     return None
 
 
