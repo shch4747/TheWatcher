@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from shared.db import Job, Run, get_session
+from shared.db import Job, Run, aware_utc, get_session
 from shared.scheduler.triggers import RunAfter, Trigger, is_due
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ async def _last_finished_at(job_name: str) -> datetime | None:
             .order_by(Run.finished_at.desc())
             .limit(1)
         )
-    return row.finished_at if row else None
+    return aware_utc(row.finished_at) if row else None
 
 
 async def due_jobs(now: datetime | None = None) -> list[str]:

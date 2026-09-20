@@ -83,6 +83,50 @@ def render_new_member_page(title: str, role: str = "Executive", slug: str | None
     )
 
 
+def render_new_thread_page(
+    slug: str,
+    title: str,
+    channel_title: str,
+    initiative: str | None,
+    summary: str,
+    items_text: str,
+    timeline_lines: list[str],
+    participants: list[str],
+    message_ids: list[str],
+) -> str:
+    now = datetime.now(UTC).isoformat()
+    initiative_line = f'initiative: "[[{initiative}]]"\n' if initiative else ""
+    participants_list = ", ".join(f'"[[{p}]]"' for p in participants)
+    message_ids_list = ", ".join(f'"{m}"' for m in message_ids)
+    timeline_body = "\n".join(timeline_lines)
+    return (
+        "---\n"
+        "type: thread\n"
+        f"slug: {slug}\n"
+        f'channel: "[[{channel_title}]]"\n'
+        f"{initiative_line}"
+        f"title: {title}\n"
+        "state: active\n"
+        f"opened_at: {now}\n"
+        f"last_message_at: {now}\n"
+        f"participants: [{participants_list}]\n"
+        f"message_ids: [{message_ids_list}]\n"
+        f"summary_cursor: {message_ids[-1] if message_ids else ''}\n"
+        "---\n"
+        f"# {title}\n"
+        "## Summary\n<!-- watcher:managed -->\n"
+        f"{summary}\n"
+        "<!-- /watcher -->\n"
+        "## Items\n<!-- watcher:managed -->\n"
+        f"{items_text}\n"
+        "<!-- /watcher -->\n"
+        "## Timeline\n<!-- watcher:append -->\n"
+        f"{timeline_body}\n"
+        "<!-- /watcher -->\n"
+        "## Notes\n"
+    )
+
+
 def render_new_channel_page(
     title: str, kind: str, slug: str | None = None, initiative: str | None = None
 ) -> str:

@@ -33,6 +33,7 @@ from shared.wiki.templates import (
     render_new_event_page,
     render_new_member_page,
     render_new_project_page,
+    render_new_thread_page,
     slugify,
 )
 
@@ -71,5 +72,6 @@ __all__ = [
     "render_new_event_page",
     "render_new_member_page",
     "render_new_project_page",
+    "render_new_thread_page",
     "slugify",
 ]

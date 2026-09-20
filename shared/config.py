@@ -31,5 +31,10 @@ class Settings(BaseSettings):
     mentor_model_name: str = "anthropic/claude-sonnet-5"
     decision_confidence_threshold: float = 0.6
 
+    batch_n: int = 40
+    batch_t_minutes: float = 180.0
+    batch_quiet_minutes: float = 5.0
+    thread_stale_days: float = 3.0
+
 
 settings = Settings()

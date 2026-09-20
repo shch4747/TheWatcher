@@ -1,0 +1,384 @@
+"""WA Agent interface (ingestion + chat agent, Spec: "WhatsApp Agent").
+This module implements batch cutting, thread assignment and thread page
+writing (Plan Phase 4). The Chat Agent (mention/reply, Proposal writes)
+is a separate, later ticket. Nothing outside this package imports below
+this module (ADR-0003); this module itself only calls the other
+packages through *their* interfaces.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from shared.config import settings
+from shared.db import Channel, MessageBuffer, Notice, aware_utc, get_session
+from shared.gateway.interface import resolve_sender
+from shared.models.decision import DecisionModelProtocol
+from shared.models.interface import decide_with_fallback, generate
+from shared.models.skill_loader import load_skills
+from shared.models.text import TextModelClient
+from shared.wiki.interface import (
+    Page,
+    Section,
+    VaultClient,
+    canonical_section_title,
+    dump_page,
+    parse_page,
+    render_new_thread_page,
+    slugify,
+)
+from sqlalchemy import select
+
+CHATTER = "chatter"
+NEW_THREAD = "new-thread"
+
+
+def _extract_message(payload: dict) -> dict:
+    msg = payload.get("message", {})
+    return {
+        "id": msg.get("id") or payload.get("id"),
+        "text": msg.get("text", ""),
+        "sender": payload.get("sender") or msg.get("sender") or "unknown",
+        "timestamp": msg.get("timestamp") or payload.get("timestamp"),
+    }
+
+
+@dataclass
+class BufferedMessage:
+    row_id: int
+    message_id: str
+    channel: str
+    received_at: datetime
+    text: str
+    sender: str
+
+
+@dataclass
+class ThreadInfo:
+    slug: str
+    path: str
+    title: str
+    summary: str
+
+
+@dataclass
+class BatchResult:
+    channel: str
+    message_count: int
+    threads_updated: list[str] = field(default_factory=list)
+    threads_created: list[str] = field(default_factory=list)
+    chatter_count: int = 0
+
+
+def is_batch_ready(messages: list[BufferedMessage], now: datetime | None = None) -> bool:
+    """N or T triggers a cut, then a quiet period with no new message must
+    have elapsed (Spec: "wait for a 5-min quiet period")."""
+    if not messages:
+        return False
+    now = now or datetime.now(UTC)
+    first = messages[0].received_at
+    last = messages[-1].received_at
+
+    size_or_time_triggered = len(messages) >= settings.batch_n or (
+        now - first >= timedelta(minutes=settings.batch_t_minutes)
+    )
+    quiet_elapsed = now - last >= timedelta(minutes=settings.batch_quiet_minutes)
+    return size_or_time_triggered and quiet_elapsed
+
+
+async def _unprocessed_messages(channel: str) -> list[BufferedMessage]:
+    async with get_session() as session:
+        rows = await session.scalars(
+            select(MessageBuffer)
+            .where(MessageBuffer.channel == channel, MessageBuffer.processed.is_(False))
+            .where(MessageBuffer.event_type.in_(("message", "message.backfill")))
+            .order_by(MessageBuffer.id)
+        )
+    out = []
+    for r in rows:
+        fields = _extract_message(json.loads(r.payload))
+        received_at = aware_utc(r.received_at)
+        assert received_at is not None  # MessageBuffer.received_at always has a default
+        out.append(
+            BufferedMessage(
+                row_id=r.id,
+                message_id=r.message_id,
+                channel=r.channel,
+                received_at=received_at,
+                text=fields["text"],
+                sender=fields["sender"],
+            )
+        )
+    return out
+
+
+async def cut_batch(channel: str, now: datetime | None = None) -> list[BufferedMessage] | None:
+    """Idempotent on message ids: callers mark rows processed after a
+    successful write, so a retry sees the same unprocessed set again."""
+    messages = await _unprocessed_messages(channel)
+    if not is_batch_ready(messages, now):
+        return None
+    return messages[: settings.batch_n] if len(messages) > settings.batch_n else messages
+
+
+async def list_active_threads(vault: VaultClient, channel_dir: str) -> list[ThreadInfo]:
+    paths = await vault.list(f"channels/{channel_dir}")
+    threads = []
+    for path in paths:
+        if "/archive/" in path or path.count("/") < 2:
+            continue  # channel index page itself, not a thread
+        result = await vault.read(path)
+        page = parse_page(result.content)
+        if page.page_type != "thread" or getattr(page.frontmatter, "state", None) != "active":
+            continue
+        summary_section = page.section("Summary")
+        threads.append(
+            ThreadInfo(
+                slug=page.frontmatter.slug,
+                path=path,
+                title=page.frontmatter.title,
+                summary=(summary_section.body if summary_section else "").strip(),
+            )
+        )
+    return threads
+
+
+async def assign_messages_to_threads(
+    messages: list[BufferedMessage],
+    active_threads: list[ThreadInfo],
+    decision_client: DecisionModelProtocol,
+    worker_client: TextModelClient,
+) -> dict[str, list[BufferedMessage]]:
+    """One Decision Model Choice per message over {each active thread,
+    new-thread, chatter}, Worker fallback below threshold (Spec). New-
+    thread messages are grouped consecutively into one new thread each -
+    a practical batch-level heuristic, not a claim that two "new-thread"
+    messages far apart in the batch are unrelated.
+    """
+    options = [t.slug for t in active_threads] + [NEW_THREAD, CHATTER]
+    buckets: dict[str, list[BufferedMessage]] = {}
+    new_thread_counter = 0
+    last_was_new_thread = False
+
+    for message in messages:
+        question = f"Which thread does this message belong to?\n\nMessage: {message.text}"
+        result = await decide_with_fallback(decision_client, worker_client, question, options)
+        choice = result.option
+
+        if choice == CHATTER:
+            buckets.setdefault(CHATTER, []).append(message)
+            last_was_new_thread = False
+        elif choice == NEW_THREAD:
+            if not last_was_new_thread:
+                new_thread_counter += 1
+            key = f"{NEW_THREAD}:{new_thread_counter}"
+            buckets.setdefault(key, []).append(message)
+            last_was_new_thread = True
+        else:
+            buckets.setdefault(choice, []).append(message)
+            last_was_new_thread = False
+
+    return buckets
+
+
+def _timeline_line(message: BufferedMessage, member_title: str | None) -> str:
+    who = f"[[{member_title}]]" if member_title else message.sender
+    ts = message.received_at.strftime("%Y-%m-%d %H:%M")
+    return f"- {ts} — {who} {message.text} [src:: {message.message_id}]"
+
+
+async def _timeline_lines(messages: list[BufferedMessage]) -> list[str]:
+    lines = []
+    for m in messages:
+        registry = await resolve_sender(m.sender)
+        lines.append(_timeline_line(m, registry.member_title if registry else None))
+    return lines
+
+
+async def _generate_summary_and_items(
+    messages: list[BufferedMessage],
+    existing_summary: str,
+    worker_client: TextModelClient,
+    skills: dict,
+) -> tuple[str, str]:
+    transcript = "\n".join(f"[{m.message_id}] {m.sender}: {m.text}" for m in messages)
+
+    summary_skill = skills.get("summarise-thread")
+    summary_prompt = f"Current summary (may be empty):\n{existing_summary}\n\nNew messages:\n{transcript}"
+    summary_result = await generate(
+        worker_client, "worker", summary_prompt, system=summary_skill.instructions if summary_skill else None
+    )
+
+    items_skill = skills.get("extract-items")
+    items_result = await generate(
+        worker_client, "worker", transcript, system=items_skill.instructions if items_skill else None
+    )
+    return summary_result.text.strip(), items_result.text.strip()
+
+
+async def _mint_title(messages: list[BufferedMessage], worker_client: TextModelClient, skills: dict) -> str:
+    naming_skill = skills.get("name-thread")
+    transcript = "\n".join(f"{m.sender}: {m.text}" for m in messages)
+    result = await generate(
+        worker_client, "worker", transcript, system=naming_skill.instructions if naming_skill else None
+    )
+    return result.text.strip() or "Untitled thread"
+
+
+def _replace_managed_section(page: Page, title: str, new_body: str) -> Page:
+    """Wholesale rewrite of a managed section's fenced content, keeping
+    the fence markers (Wiki Format: managed = agent rewrites wholesale)."""
+
+    canonical = canonical_section_title(page.page_type, title)
+    new_sections = []
+    for section in page.sections:
+        if canonical_section_title(page.page_type, section.title) == canonical:
+            body = f"<!-- watcher:managed -->\n{new_body}\n<!-- /watcher -->\n"
+            new_sections.append(Section(title=section.title, header_raw=section.header_raw, body=body))
+        else:
+            new_sections.append(section)
+    return Page(
+        page_type=page.page_type,
+        frontmatter=page.frontmatter,
+        frontmatter_raw=page.frontmatter_raw,
+        preamble=page.preamble,
+        sections=new_sections,
+    )
+
+
+def _append_to_section(page: Page, title: str, lines: list[str]) -> Page:
+    """Append-only (Wiki Format: append = agent appends, humans may edit
+    earlier lines) - inserts new lines just before the closing fence."""
+
+    canonical = canonical_section_title(page.page_type, title)
+    new_sections = []
+    addition = "\n".join(lines)
+    for section in page.sections:
+        if canonical_section_title(page.page_type, section.title) == canonical:
+            body = section.body
+            if "<!-- /watcher -->" in body:
+                body = body.replace("<!-- /watcher -->", f"{addition}\n<!-- /watcher -->", 1)
+            else:
+                body = f"{body.rstrip()}\n{addition}\n"
+            new_sections.append(Section(title=section.title, header_raw=section.header_raw, body=body))
+        else:
+            new_sections.append(section)
+    return Page(
+        page_type=page.page_type,
+        frontmatter=page.frontmatter,
+        frontmatter_raw=page.frontmatter_raw,
+        preamble=page.preamble,
+        sections=new_sections,
+    )
+
+
+async def _mark_processed(rows: list[BufferedMessage]) -> None:
+    async with get_session() as session:
+        for m in rows:
+            row = await session.get(MessageBuffer, m.row_id)
+            if row is not None:
+                row.processed = True
+        await session.commit()
+
+
+async def _advance_cursor(channel_jid: str, last_message_id: str) -> None:
+    async with get_session() as session:
+        channel = await session.scalar(select(Channel).where(Channel.jid == channel_jid))
+        if channel is not None:
+            channel.cursor = last_message_id
+            await session.commit()
+
+
+async def _post_notice(channel: Channel, thread_slug: str, since_message_id: str | None) -> None:
+    if channel.kind not in ("project", "event") or not channel.initiative:
+        return
+    async with get_session() as session:
+        session.add(
+            Notice(
+                agent="project_agent",
+                channel=channel.jid,
+                thread_slug=thread_slug,
+                since_message_id=since_message_id,
+            )
+        )
+        await session.commit()
+
+
+async def run_batch(
+    channel_jid: str,
+    vault: VaultClient,
+    decision_client: DecisionModelProtocol,
+    worker_client: TextModelClient,
+    skills_dir: Path | None = None,
+    now: datetime | None = None,
+) -> BatchResult | None:
+    """Orchestrates one batch: cut -> assign -> write thread pages ->
+    advance cursor -> mark processed -> post notices. Returns None if the
+    batch isn't ready yet (Spec: batch cut per channel, idempotent)."""
+
+    messages = await cut_batch(channel_jid, now)
+    if messages is None:
+        return None
+
+    async with get_session() as session:
+        channel = await session.scalar(select(Channel).where(Channel.jid == channel_jid))
+    if channel is None:
+        return None
+
+    channel_dir = slugify(channel.title or channel_jid)
+    active_threads = await list_active_threads(vault, channel_dir)
+    buckets = await assign_messages_to_threads(messages, active_threads, decision_client, worker_client)
+
+    repo_skills_dir = skills_dir or (Path(__file__).resolve().parents[2] / "skills")
+    skills = load_skills(repo_skills_dir)
+
+    result = BatchResult(channel=channel_jid, message_count=len(messages))
+    threads_by_slug = {t.slug: t for t in active_threads}
+
+    for key, bucket_messages in buckets.items():
+        if key == CHATTER:
+            result.chatter_count += len(bucket_messages)
+            continue
+
+        timeline_lines = await _timeline_lines(bucket_messages)
+
+        if key.startswith(f"{NEW_THREAD}:"):
+            title = await _mint_title(bucket_messages, worker_client, skills)
+            slug = f"{bucket_messages[0].received_at.strftime('%Y%m%d')}-{slugify(title)}"
+            summary, items_text = await _generate_summary_and_items(
+                bucket_messages, "", worker_client, skills
+            )
+            participants = sorted({m.sender for m in bucket_messages})
+            page_text = render_new_thread_page(
+                slug=slug,
+                title=title,
+                channel_title=channel.title or channel_jid,
+                initiative=channel.initiative,
+                summary=summary,
+                items_text=items_text,
+                timeline_lines=timeline_lines,
+                participants=participants,
+                message_ids=[m.message_id for m in bucket_messages],
+            )
+            await vault.write(f"channels/{channel_dir}/{slug}.md", page_text, base_revision="")
+            result.threads_created.append(slug)
+            await _post_notice(channel, slug, bucket_messages[-1].message_id)
+        else:
+            thread = threads_by_slug[key]
+            existing = await vault.read(thread.path)
+            page = parse_page(existing.content)
+            summary, items_text = await _generate_summary_and_items(
+                bucket_messages, thread.summary, worker_client, skills
+            )
+            page = _replace_managed_section(page, "Summary", summary)
+            page = _replace_managed_section(page, "Items", items_text)
+            page = _append_to_section(page, "Timeline", timeline_lines)
+            await vault.write(thread.path, dump_page(page), base_revision=existing.revision)
+            result.threads_updated.append(key)
+            await _post_notice(channel, key, bucket_messages[-1].message_id)
+
+    await _mark_processed(messages)
+    await _advance_cursor(channel_jid, messages[-1].message_id)
+    return result

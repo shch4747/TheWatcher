@@ -42,6 +42,7 @@ class ConflictError(Exception):
 class VaultClient(Protocol):
     async def read(self, path: str) -> ReadResult: ...
     async def write(self, path: str, content: str, base_revision: str) -> WriteResult: ...
+    async def list(self, prefix: str) -> list[str]: ...
 
 
 def _hash(content: str) -> str:
@@ -76,6 +77,16 @@ class LocalDirClient:
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(content)
         return WriteResult(revision=_hash(content))
+
+    async def list(self, prefix: str) -> list[str]:
+        base = self._file(prefix)
+        if not base.exists():
+            return []
+        return sorted(
+            str(p.relative_to(self.root))
+            for p in base.rglob("*.md")
+            if ".sync-conflicts" not in p.parts
+        )
 
     def _write_conflict_note(
         self, path: str, base_revision: str, current_content: str, attempted_content: str
@@ -131,6 +142,13 @@ class LapisClient:
             raise ConflictError(path, base_revision, data.get("current_revision", "unknown"))
         resp.raise_for_status()
         return WriteResult(revision=resp.json()["revision"])
+
+    async def list(self, prefix: str) -> list[str]:
+        resp = await self._client.get(
+            f"{self.base_url}/vault/{self.vault_id}/list/{prefix}", headers=self._headers()
+        )
+        resp.raise_for_status()
+        return resp.json().get("paths", [])
 
     async def aclose(self) -> None:
         await self._client.aclose()

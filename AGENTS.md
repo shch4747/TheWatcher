@@ -6,7 +6,7 @@ This is the v1 application described in `docs/Spec - Watcher v1.md` and
 - `shared/{gateway,scheduler,wiki,models,cms}/` — cross-cutting packages
   every agent depends on. Each exposes exactly one `interface.py`:
   `async` functions with Pydantic models in and out.
-- `agents/wa-agent/` and `agents/project-agent/` — the two agents in v1
+- `agents/wa_agent/` and `agents/project_agent/` — the two agents in v1
   scope, each its own package with its own `interface.py`, owned
   independently.
 - `agents/innovation-agent/` and `agents/research-agent/` — **frozen** for
@@ -19,10 +19,10 @@ This is the v1 application described in `docs/Spec - Watcher v1.md` and
 
 - Nothing outside a package imports anything from it except its
   `interface` module. Never `from shared.gateway.gowa_client import ...`
-  from `agents/wa-agent` — go through `shared.gateway.interface`.
+  from `agents/wa_agent` — go through `shared.gateway.interface`.
 - No package calls gowa, an LLM provider, or Lapis directly except
   `shared.gateway`, `shared.models`, and `shared.wiki` respectively.
-- No cross-imports between `agents/wa-agent` and `agents/project-agent`,
+- No cross-imports between `agents/wa_agent` and `agents/project_agent`,
   or between either of them and the frozen agents.
 - One Python application, one container (ADR-0005) — not one process per
   agent folder. `agents/*` is an ownership boundary for contributors, not
