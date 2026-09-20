@@ -66,10 +66,28 @@ process start, so `docker compose up -d` after editing it is enough.
 - `/ingest` - run the batch-cutting ingestion job (`ingest_tick`) right
   now instead of waiting for its next 2-minute tick - useful right
   after `/setup` or while testing against a live channel.
-- `/health` - gowa/vault/model connectivity plus admin/channel/proposal
-  counts, for a sanity check from your phone.
+- `/health` - gowa/vault/model connectivity, admin/channel/proposal
+  counts, and the outcome of each scheduled job's last run
+  (`ingest_tick`, `lifecycle_tick`, `project_agent_tick`) - check this
+  proactively any time, from your phone.
 - `/link <wa-jid> [[Member Title]]` - manually link a WhatsApp identity
   to a Members Registry page, bypassing fuzzy-match Proposals.
+
+## Finding out about a failed scheduled job
+
+Two ways, one proactive and one you check yourself:
+
+1. **Pushed automatically**: when a scheduled job (`ingest_tick`,
+   `lifecycle_tick`, `sunday_nudge_tick`, `project_agent_tick`) fails
+   and exhausts its retries, `main.py`'s `_notify_job_failure` posts a
+   `⚠️ <job_name> failed: <error>` message to the coordis channel (the
+   one Bot Admin channel `/setup coordis` creates). If no coordis
+   channel is set up yet, nothing gets pushed - `docker compose logs
+   watcher` still has it (`logger.warning`), and it's still recorded
+   in the run ledger either way.
+2. **Check yourself**: `/health` reports the outcome, time, and error
+   (if any) of each scheduled job's most recent run - useful right
+   after deploying, or if you're not sure a coordis channel exists yet.
 
 ## Re-login after a ban
 

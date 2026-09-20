@@ -23,7 +23,7 @@ from agents.wa_agent.interface import (
 )
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
-from shared.gateway.interface import list_channels, register_message_hook
+from shared.gateway.interface import list_channels, notify_admins, register_message_hook
 from shared.models.decision import default_decision_client
 from shared.models.text import worker_model
 from shared.scheduler.interface import RunEvery, due_jobs, register, run_job
@@ -67,10 +67,25 @@ async def _project_agent_tick() -> None:
     await run_project_agent_once(default_vault_client(), worker_model())
 
 
+async def _notify_job_failure(job_name: str, error: str) -> None:
+    """A scheduled job exhausted its retries - tell a Bot Admin over
+    WhatsApp instead of leaving it only in `docker compose logs` and
+    the run ledger (`/health` also shows the last run of each job, for
+    checking proactively rather than waiting for this push)."""
+    posted = await notify_admins(f"⚠️ *{job_name}* failed: {error}")
+    if not posted:
+        logger.warning("job %s failed and there's no coordis channel to notify: %s", job_name, error)
+
+
 def setup_jobs() -> None:
     register_message_hook(_chat_hook)
     register(
-        "ingest_tick", _ingest_tick, RunEvery(timedelta(minutes=2)), lock_key="ingest_tick", max_retries=1
+        "ingest_tick",
+        _ingest_tick,
+        RunEvery(timedelta(minutes=2)),
+        lock_key="ingest_tick",
+        max_retries=1,
+        on_failure=_notify_job_failure,
     )
     register(
         "lifecycle_tick",
@@ -78,6 +93,7 @@ def setup_jobs() -> None:
         RunEvery(timedelta(hours=24)),
         lock_key="lifecycle_tick",
         max_retries=1,
+        on_failure=_notify_job_failure,
     )
     register(
         "sunday_nudge_tick",
@@ -85,6 +101,7 @@ def setup_jobs() -> None:
         RunEvery(timedelta(hours=24)),
         lock_key="sunday_nudge_tick",
         max_retries=1,
+        on_failure=_notify_job_failure,
     )
     register(
         "project_agent_tick",
@@ -92,6 +109,7 @@ def setup_jobs() -> None:
         RunEvery(timedelta(minutes=2)),
         lock_key="project_agent_tick",
         max_retries=1,
+        on_failure=_notify_job_failure,
     )
 
 

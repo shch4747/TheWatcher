@@ -45,7 +45,7 @@ from shared.gateway.commands import (
 from shared.gateway.events import GowaEvent as GowaEvent  # re-exported for agents/wa_agent
 from shared.gateway.events import parse_gowa_event, wrap_backfilled_message
 from shared.gateway.gowa_client import GowaClient
-from shared.scheduler.interface import due_jobs, run_job
+from shared.scheduler.interface import due_jobs, ledger_tail, run_job
 from shared.wiki.interface import (
     LapisClient,
     VaultClient,
@@ -467,7 +467,24 @@ async def health() -> str:
     lines.append(f"bot admins: {admin_count}  watched channels: {channel_count}")
     lines.append(f"pending proposals: {pending_proposals}  jobs due: {len(due)} {due if due else ''}".strip())
 
+    for job_name in ("ingest_tick", "lifecycle_tick", "project_agent_tick"):
+        last = await ledger_tail(job_name, limit=1)
+        if not last:
+            lines.append(f"{job_name}: no runs yet")
+            continue
+        run = last[0]
+        if run.outcome == "success":
+            lines.append(f"{job_name}: ✅ last ran {_isoformat(run.finished_at)}")
+        elif run.outcome == "failure":
+            lines.append(f"{job_name}: ❌ failed {_isoformat(run.finished_at)} - {run.error}")
+        else:
+            lines.append(f"{job_name}: ⏳ started {_isoformat(run.started_at)}, still running")
+
     return "\n".join(lines)
+
+
+def _isoformat(dt: datetime | None) -> str:
+    return dt.strftime("%Y-%m-%d %H:%M UTC") if dt else "unknown"
 
 
 async def link(cmd: LinkCommand, requested_by: str) -> str:
@@ -525,6 +542,19 @@ async def resolve_sender(wa_identity: str) -> MembersRegistry | None:
 async def _admin_channel() -> str | None:
     coordis = await _channel_by_kind("coordis")
     return coordis.jid if coordis else None
+
+
+async def notify_admins(text: str) -> bool:
+    """Post `text` to the admin (coordis) channel, if one is set up -
+    used for proactive alerts (e.g. a scheduled job failing, see
+    main.py's `_notify_job_failure`) so a Bot Admin finds out from
+    WhatsApp instead of having to think to check `docker compose logs`
+    or `/health`. Returns whether it could actually be sent."""
+    channel = await _admin_channel()
+    if channel is None:
+        return False
+    await send(channel, text)
+    return True
 
 
 async def propose_identity_link(

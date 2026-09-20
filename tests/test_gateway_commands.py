@@ -223,6 +223,49 @@ async def test_ingest_command_refuses_non_admin():
     assert "only bot admins" in reply.lower()
 
 
+async def _clear_coordis_channel() -> None:
+    """The coordis kind is a singleton and other tests in this module
+    leave one set up in the shared test DB - clear it first so these
+    two tests can assert on a known admin-channel state."""
+    existing = await gateway.get_channel_by_kind("coordis")
+    if existing is not None:
+        await gateway.unwatch(existing.jid, ADMIN)
+
+
+async def test_notify_admins_returns_false_with_no_coordis_channel():
+    await _clear_coordis_channel()
+    assert await gateway.notify_admins("something failed") is False
+
+
+async def test_notify_admins_posts_to_the_coordis_channel(vault: LocalDirClient):
+    await _clear_coordis_channel()
+    coordis = "coordis-notify@g.us"
+    await gateway.setup(coordis, ADMIN, SetupCommand(kind="coordis", title=None), vault)
+
+    posted = await gateway.notify_admins("⚠️ ingest_tick failed: boom")
+    assert posted is True
+
+    sent = fake_gowa_app.state.sent_messages
+    assert any(m["phone"] == coordis and "boom" in m["message"] for m in sent)
+
+
+async def test_health_reports_last_run_of_each_scheduled_job():
+    from shared.db import Run
+
+    async with get_session() as session:
+        session.add(Run(job_name="ingest_tick", outcome="failure", error="ConnectionError: boom"))
+        await session.commit()
+        row = await session.scalar(select(Run).where(Run.job_name == "ingest_tick"))
+        assert row is not None
+        row.finished_at = row.started_at
+        await session.commit()
+
+    report = await gateway.health()
+    assert "ingest_tick: ❌" in report
+    assert "boom" in report
+    assert "lifecycle_tick: no runs yet" in report or "lifecycle_tick:" in report
+
+
 async def test_link_writes_members_registry():
     cmd = LinkCommand(sender_ref="919876543210@s.whatsapp.net", member_ref="[[Aira]]")
     reply = await gateway.link(cmd, ADMIN)
