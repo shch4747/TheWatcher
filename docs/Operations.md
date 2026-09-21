@@ -52,11 +52,16 @@ process start, so `docker compose up -d` after editing it is enough.
 
 ## Bot Admin commands (any allowlisted-or-not group, Bot Admin only)
 
-- `/setup [project|event|coordis|exes|research|all|other] [<Title>]` -
-  register the group this is sent from as a watched channel.
+- `/setup [project|event|coordis|exes|research|all|other|logs] [<Title>]`
+  - register the group this is sent from as a watched channel.
   `project`/`event` open a lead/brief/timeline dialogue if the
-  initiative page doesn't exist yet; `coordis`/`exes`/`research`/`all`
-  are singletons (a second `/setup` of the same kind is refused).
+  initiative page doesn't exist yet; `coordis`/`exes`/`research`/`all`/
+  `logs` are singletons (a second `/setup` of the same kind is
+  refused). `logs` is where all debug logging and error reporting goes
+  (job-failure alerts, and any future debug output) - never coordis,
+  which is reserved for Proposals a Bot Admin needs to act on with a
+  👍. Set it up once with `/setup logs` from whatever group you want
+  the bot's noise in.
 - `/channels` - list every watched channel with its jid, kind, and
   initiative - the jid is what `/unwatch <jid>` needs.
 - `/unwatch` - stop watching the channel this is sent from.
@@ -83,14 +88,14 @@ Two ways, one proactive and one you check yourself:
 1. **Pushed automatically**: when a scheduled job (`ingest_tick`,
    `lifecycle_tick`, `sunday_nudge_tick`, `project_agent_tick`) fails
    and exhausts its retries, `main.py`'s `_notify_job_failure` posts a
-   `⚠️ <job_name> failed: <error>` message to the coordis channel (the
-   one Bot Admin channel `/setup coordis` creates). If no coordis
-   channel is set up yet, nothing gets pushed - `docker compose logs
-   watcher` still has it (`logger.warning`), and it's still recorded
-   in the run ledger either way.
+   `⚠️ <job_name> failed: <error>` message to the **logs** channel (the
+   one `/setup logs` creates - never coordis). If no logs channel is
+   set up yet, nothing gets pushed - `docker compose logs watcher`
+   still has it (`logger.warning`), and it's still recorded in the run
+   ledger either way.
 2. **Check yourself**: `/health` reports the outcome, time, and error
    (if any) of each scheduled job's most recent run - useful right
-   after deploying, or if you're not sure a coordis channel exists yet.
+   after deploying, or if you're not sure a logs channel exists yet.
 
 ## Re-login after a ban
 

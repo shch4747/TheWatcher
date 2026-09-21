@@ -23,7 +23,7 @@ from agents.wa_agent.interface import (
 )
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
-from shared.gateway.interface import list_channels, notify_admins, register_message_hook
+from shared.gateway.interface import list_channels, notify_logs, register_message_hook
 from shared.models.decision import default_decision_client
 from shared.models.text import worker_model
 from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, run_job
@@ -78,10 +78,12 @@ async def _notify_job_failure(job_name: str, error: str) -> None:
     """A scheduled job exhausted its retries - tell a Bot Admin over
     WhatsApp instead of leaving it only in `docker compose logs` and
     the run ledger (`/health` also shows the last run of each job, for
-    checking proactively rather than waiting for this push)."""
-    posted = await notify_admins(f"⚠️ *{job_name}* failed: {error}")
+    checking proactively rather than waiting for this push). Always the
+    logs channel (`/setup logs`), never coordis - coordis is reserved
+    for Proposals."""
+    posted = await notify_logs(f"⚠️ *{job_name}* failed: {error}")
     if not posted:
-        logger.warning("job %s failed and there's no coordis channel to notify: %s", job_name, error)
+        logger.warning("job %s failed and there's no logs channel to notify: %s", job_name, error)
 
 
 def setup_jobs() -> None:

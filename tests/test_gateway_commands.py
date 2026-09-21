@@ -67,6 +67,7 @@ def vault(tmp_path: Path) -> LocalDirClient:
 def test_parse_command_recognizes_all_shapes():
     assert parse_command("/setup project Watcher") == SetupCommand(kind="project", title="Watcher")
     assert parse_command("/setup coordis") == SetupCommand(kind="coordis", title=None)
+    assert parse_command("/setup logs") == SetupCommand(kind="logs", title=None)
     assert parse_command("/unwatch") == UnwatchCommand()
     assert parse_command("/status") == StatusCommand()
     assert parse_command("/link 919876543210@s.whatsapp.net [[Aira]]") == LinkCommand(
@@ -127,6 +128,17 @@ async def test_second_setup_of_singleton_kind_is_refused(vault: LocalDirClient):
 
     other_channel = await gateway.get_channel("coordis-group-2@g.us")
     assert other_channel is None
+
+
+async def test_logs_is_a_singleton_kind(vault: LocalDirClient):
+    first = await gateway.setup("logs-group-1@g.us", ADMIN, SetupCommand(kind="logs", title=None), vault)
+    assert first == "watching"
+
+    second = await gateway.setup(
+        "logs-group-2@g.us", ADMIN, SetupCommand(kind="logs", title=None), vault
+    )
+    assert "already set up" in second
+    assert await gateway.get_channel("logs-group-2@g.us") is None
 
 
 async def test_setup_from_non_admin_is_refused(vault: LocalDirClient):
@@ -223,30 +235,34 @@ async def test_ingest_command_refuses_non_admin():
     assert "only bot admins" in reply.lower()
 
 
-async def _clear_coordis_channel() -> None:
-    """The coordis kind is a singleton and other tests in this module
-    leave one set up in the shared test DB - clear it first so these
-    two tests can assert on a known admin-channel state."""
-    existing = await gateway.get_channel_by_kind("coordis")
+async def _clear_singleton_channel(kind: str) -> None:
+    """coordis/logs are singletons and other tests in this module leave
+    one set up in the shared test DB - clear it first so these tests
+    can assert on a known channel state."""
+    existing = await gateway.get_channel_by_kind(kind)
     if existing is not None:
         await gateway.unwatch(existing.jid, ADMIN)
 
 
-async def test_notify_admins_returns_false_with_no_coordis_channel():
-    await _clear_coordis_channel()
-    assert await gateway.notify_admins("something failed") is False
+async def test_notify_logs_returns_false_with_no_logs_channel():
+    await _clear_singleton_channel("logs")
+    assert await gateway.notify_logs("something failed") is False
 
 
-async def test_notify_admins_posts_to_the_coordis_channel(vault: LocalDirClient):
-    await _clear_coordis_channel()
-    coordis = "coordis-notify@g.us"
+async def test_notify_logs_posts_to_the_logs_channel_not_coordis(vault: LocalDirClient):
+    await _clear_singleton_channel("logs")
+    await _clear_singleton_channel("coordis")
+    logs = "logs-notify@g.us"
+    coordis = "coordis-should-not-receive@g.us"
+    await gateway.setup(logs, ADMIN, SetupCommand(kind="logs", title=None), vault)
     await gateway.setup(coordis, ADMIN, SetupCommand(kind="coordis", title=None), vault)
 
-    posted = await gateway.notify_admins("⚠️ ingest_tick failed: boom")
+    posted = await gateway.notify_logs("⚠️ ingest_tick failed: boom")
     assert posted is True
 
     sent = fake_gowa_app.state.sent_messages
-    assert any(m["phone"] == coordis and "boom" in m["message"] for m in sent)
+    assert any(m["phone"] == logs and "boom" in m["message"] for m in sent)
+    assert not any(m["phone"] == coordis and "boom" in m["message"] for m in sent)
 
 
 async def test_health_reports_last_run_of_each_scheduled_job():

@@ -6,8 +6,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-SINGLETON_KINDS = {"coordis", "exes", "research", "all"}
-SETUP_KINDS = {"project", "event", "coordis", "exes", "research", "all", "other"}
+SINGLETON_KINDS = {"coordis", "exes", "research", "all", "logs"}
+SETUP_KINDS = {"project", "event", "coordis", "exes", "research", "all", "other", "logs"}
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ Command = (
 )
 
 _SETUP_RE = re.compile(
-    r"^/setup(?:\s+(?P<kind>project|event|coordis|exes|research|all|other))?(?:\s+(?P<title>.+))?\s*$",
+    r"^/setup(?:\s+(?P<kind>project|event|coordis|exes|research|all|other|logs))?(?:\s+(?P<title>.+))?\s*$",
     re.IGNORECASE,
 )
 _UNWATCH_RE = re.compile(r"^/unwatch(?:\s+(?P<jid>\S+))?\s*$", re.IGNORECASE)

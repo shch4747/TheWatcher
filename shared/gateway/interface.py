@@ -276,7 +276,7 @@ async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: V
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /setup."
 
-    if cmd.kind in ("coordis", "exes", "research", "all"):
+    if cmd.kind in ("coordis", "exes", "research", "all", "logs"):
         existing = await _channel_by_kind(cmd.kind)
         if existing is not None and existing.jid != channel_jid:
             return f"A {cmd.kind} channel is already set up; refusing a second one."
@@ -545,13 +545,21 @@ async def _admin_channel() -> str | None:
     return coordis.jid if coordis else None
 
 
-async def notify_admins(text: str) -> bool:
-    """Post `text` to the admin (coordis) channel, if one is set up -
-    used for proactive alerts (e.g. a scheduled job failing, see
-    main.py's `_notify_job_failure`) so a Bot Admin finds out from
-    WhatsApp instead of having to think to check `docker compose logs`
-    or `/health`. Returns whether it could actually be sent."""
-    channel = await _admin_channel()
+async def _logs_channel() -> str | None:
+    logs = await _channel_by_kind("logs")
+    return logs.jid if logs else None
+
+
+async def notify_logs(text: str) -> bool:
+    """Post `text` to the logs channel (`/setup logs`), if one is set
+    up - the *only* place debug logging and error reporting go (never
+    coordis, which is reserved for Proposals a Bot Admin needs to act
+    on with a 👍). Used for proactive alerts like a scheduled job
+    failing (see main.py's `_notify_job_failure`) so a Bot Admin finds
+    out from WhatsApp instead of having to think to check
+    `docker compose logs` or `/health`. Returns whether it could
+    actually be sent."""
+    channel = await _logs_channel()
     if channel is None:
         return False
     await send(channel, text)

@@ -69,7 +69,7 @@ class EventFrontmatter(Frontmatter):
 
 class ChannelFrontmatter(Frontmatter):
     type: Literal["channel"] = "channel"
-    kind: Literal["coordis", "exes", "research", "all", "project", "event", "other"]
+    kind: Literal["coordis", "exes", "research", "all", "project", "event", "other", "logs"]
     initiative: str | None = None
     cursor: str | None = None
     last_batch: datetime | None = None
