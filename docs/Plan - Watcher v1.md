@@ -46,7 +46,7 @@ Implements [[Spec - Watcher v1]]. Each phase ends with something runnable and de
 
 ## Phase 4 — Ingestion: batches, threads, notices (≈3 weeks)
 **Goal:** a watched group produces correct thread pages and inbox notices without human involvement.
-- `models` package: Decision Model client (Jev Choice/Noul/Score, batched), Worker and Mentor adapters behind one interface, per-call cost logging; fixtures for tests.
+- `models` package: Decision Model client (Jev Choice/Noul/Score, batched), Worker and Mentor adapters behind one interface, per-call cost logging; fixtures for tests. (Cost is measured from the provider response rather than a price table, and attribution rides in a ContextVar — ADR-0013.)
 - Batch cutter (N/T/quiet from `meta/config.md`) under the channel lock; backfill batches.
 - Thread assignment (Decision Model → Worker fallback, multi-label rule); thread creation with ids/titles; chatter dropping.
 - Thread page writing (Summary, Items, Timeline with `[src:: ]` on every line); channel index; cursor; Update Notices; Mentor re-check for decisions/low confidence.
@@ -63,7 +63,7 @@ Implements [[Spec - Watcher v1]]. Each phase ends with something runnable and de
 
 ## Phase 6 — Hardening and handover (≈2 weeks)
 **Goal:** cheap, observable, and maintainable by people who didn't build it.
-- Worker model benchmark (GPT-6 Luna vs GLM 5.3 Flash vs `claude-haiku-4-5`) on the recorded eval set; pick and record in an ADR; cost report per batch in the run ledger.
+- Worker model benchmark (GPT-6 Luna vs GLM 5.3 Flash vs `claude-haiku-4-5`) on the recorded eval set; pick and record in an ADR; cost report per batch in the run ledger. **Delivered by ADR-0013**, which goes further than "in the run ledger": per-channel timing and per-phase (classification vs summarisation) tokens/cost in `obs_ingest_runs`/`obs_ingest_channel_runs`, a report posted to the logs channel after each run that did work, a provisioned Grafana dashboard over the same SQLite file, an audit row per wiki write in `obs_vault_ops`, and OpenTelemetry traces in a self-hosted Phoenix.
 - Live eval set (10–20 conversations with expected threads/items), run manually before releases.
 - Operator docs: deploy, re-login after a ban, rotate the number, restore from backup; contributor docs per module.
 - HTTP adapter over interfaces (stub for MCP later); security pass (webhook secret rotation, CMS token handling, PII lint in CI).

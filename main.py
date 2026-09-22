@@ -34,6 +34,15 @@ from shared.wiki.interface import default_vault_client, slugify
 
 logger = logging.getLogger(__name__)
 
+# Without this only uvicorn's own loggers are configured: every
+# logger.info in the app is dropped, and warnings reach stderr only via
+# logging's lastResort handler, unformatted and untimestamped. An
+# observability build that can't see its own logs is not much of one.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+)
+
 # How often the tick loop checks for due jobs - independent of each
 # job's own RunEvery interval below.
 SCHEDULER_POLL_SECONDS = 30

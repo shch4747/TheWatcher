@@ -41,6 +41,7 @@ def setup_tracing() -> bool:
         return False
 
     try:
+        from opentelemetry import trace
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
@@ -56,6 +57,11 @@ def setup_tracing() -> bool:
         provider.add_span_processor(
             BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_endpoint))
         )
+        # Also register globally, not just on the pydantic-ai settings:
+        # that's what flushes pending spans at shutdown, and what any
+        # other instrumentation added later would pick up. Guarded by
+        # `_configured` because OTel only honours the first call.
+        trace.set_tracer_provider(provider)
         Agent.instrument_all(
             InstrumentationSettings(
                 tracer_provider=provider,
