@@ -47,9 +47,14 @@ class DecisionModelProtocol(Protocol):
 
 class JevClient:
     """Thin adapter over `typesafe_sdk.AsyncTypeSafeClient` - one
-    `system_one()` call per question, `state` set to the question text
-    itself since our Choice/Noul/Score questions are already
-    self-contained strings, not separate context + instructions."""
+    `system_one()` call per question. Our Choice/Noul/Score questions
+    are single self-contained strings (context + what to decide, both
+    in one), so `question` is passed as both `state` and each
+    question's `instructions` - redundant, but Noul's `instructions`
+    (or `criteria`) is not optional server-side (confirmed live:
+    `Noul()` with neither raises "Noul question must have criteria or
+    instructions"), and passing it everywhere is simpler than reasoning
+    about which question types can get away without it."""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self._client = AsyncTypeSafeClient(api_key=api_key, base_url=base_url)
@@ -57,14 +62,16 @@ class JevClient:
     async def choice(self, question: str, options: list[str]) -> ChoiceResult:
         response = await self._client.system_one(
             state=question,
-            questions={"result": Choice(criteria={option: None for option in options})},
+            questions={
+                "result": Choice(instructions=question, criteria={option: None for option in options})
+            },
         )
         answer = response.choices["result"]
         return ChoiceResult(option=answer.choice, probabilities=dict(answer.probabilities))
 
     async def noul(self, question: str) -> NoulResult:
         response = await self._client.system_one(
-            state=question, questions={"result": Noul()}
+            state=question, questions={"result": Noul(instructions=question)}
         )
         probability = response.nouls["result"].noul
         return NoulResult(answer=probability >= 0.5, confidence=abs(probability - 0.5) * 2)
@@ -75,10 +82,18 @@ class JevClient:
         # borrow - "low/medium/high" is a generic 3-rung placeholder,
         # not a verified default. Replace it with real criteria the
         # moment a caller needs Score for something specific.
+        criteria = ["low", "medium", "high"]
         response = await self._client.system_one(
-            state=question, questions={"result": Score(criteria=["low", "medium", "high"])}
+            state=question, questions={"result": Score(instructions=question, criteria=criteria)}
         )
-        return ScoreResult(value=response.scores["result"].score)
+        # Confirmed live: Jev's raw score is a rung index (0..len(criteria)-1,
+        # possibly interpolated), NOT normalized to 0-1 as docs.typesafe.ai's
+        # own quickstart example implies - a top-rung answer on this 3-item
+        # scale came back as 2.0, not 1.0. Normalize here so ScoreResult.value
+        # means the same thing (0-1) regardless of which DecisionModelProtocol
+        # implementation produced it - WorkerBackedDecisionModel.score()
+        # already returns a 0-1 float.
+        return ScoreResult(value=response.scores["result"].score / (len(criteria) - 1))
 
     async def aclose(self) -> None:
         await self._client.aclose()

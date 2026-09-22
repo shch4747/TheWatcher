@@ -120,6 +120,15 @@ async def test_worker_backed_decision_model_falls_back_on_invalid_choice():
 def test_default_decision_client_picks_worker_backed_without_jev(monkeypatch: pytest.MonkeyPatch):
     from shared.config import settings
 
-    monkeypatch.setattr(settings, "jev_base_url", None)
+    monkeypatch.setattr(settings, "jev_api_key", None)
     client = default_decision_client(_worker("x"))
     assert isinstance(client, WorkerBackedDecisionModel)
+
+
+def test_default_decision_client_picks_jev_when_api_key_set(monkeypatch: pytest.MonkeyPatch):
+    from shared.config import settings
+    from shared.models.decision import JevClient
+
+    monkeypatch.setattr(settings, "jev_api_key", "test-key")
+    client = default_decision_client(_worker("x"))
+    assert isinstance(client, JevClient)
