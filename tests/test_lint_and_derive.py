@@ -12,9 +12,11 @@ from shared.wiki.interface import (
     MemberIndexRow,
     NotDerivedError,
     ReadmeData,
+    contains_pii,
     dump_page,
     lint_text,
     parse_page,
+    redact_pii,
     render_lint_report,
     render_members_index,
     render_readme,
@@ -63,6 +65,17 @@ def test_dates_and_message_ids_are_not_flagged_as_pii():
     issues = lint_text("project_watcher.md", text)
     errors = [i for i in issues if "phone" in i.message]
     assert errors == []
+
+
+def test_contains_pii_and_redact_pii():
+    assert contains_pii("919244352208@s.whatsapp.net") is True
+    assert contains_pii("+91 98765 43210") is True
+    assert contains_pii("2026-09-18 10:00") is False
+    assert contains_pii("Booking the seminar hall") is False
+
+    redacted = redact_pii("Contact 919244352208@s.whatsapp.net about the venue")
+    assert "919244352208" not in redacted
+    assert "venue" in redacted
 
 
 def test_repair_missing_sections_is_additive_only():

@@ -32,8 +32,10 @@ from shared.wiki.interface import (
     McpToolError,
     VaultClient,
     append_to_section,
+    contains_pii,
     dump_page,
     parse_page,
+    redact_pii,
     render_new_thread_page,
     replace_managed_section,
     set_derived_section,
@@ -390,17 +392,24 @@ def _looks_like_meta_commentary(title: str) -> bool:
     return bool(_META_COMMENTARY_RE.search(title))
 
 
-_TITLE_LEADING_MARKER_RE = re.compile(r"^[\-\*••]+\s*|^\d+[.)]\s*")
+_TITLE_LEADING_MARKER_RE = re.compile(r"^[\-*•]+\s*|^\d+[.)]\s*")
+# A leading label like "Title:", "**Message summary:**", "Summary -" -
+# real observed output was a whole "**Message summary:** An incoming
+# message..." sentence, not a title.
+_TITLE_LEADING_LABEL_RE = re.compile(r"^[*_]{0,2}[A-Za-z][A-Za-z \-]{0,30}[*_]{0,2}:\*{0,2}\s*-?\s*")
+_CODE_FENCE_RE = re.compile(r"^```\w*\s*$", re.MULTILINE)
 
 
 def _strip_title_markers(text: str) -> str:
-    """Strip a leading list/bullet marker ("- ", "* ", "1. ") and
-    wrapping quotes/emphasis - a model asked for a short title
-    sometimes formats it as a bullet point (real observed output:
-    "- A participant asked what"), which isn't a title, it's a fragment
-    of a list the model imagined it was writing."""
-    text = _TITLE_LEADING_MARKER_RE.sub("", text.strip())
-    return text.strip().strip("\"'").strip("*_ ")
+    """Strip a leading list/bullet marker ("- ", "* ", "1. "), a leading
+    label ("Title:", "**Summary:**"), and any stray markdown emphasis/
+    code-fence characters - a title is plain text, never formatted, no
+    matter how the model dressed it up."""
+    text = _CODE_FENCE_RE.sub("", text).strip()
+    text = _TITLE_LEADING_MARKER_RE.sub("", text)
+    text = _TITLE_LEADING_LABEL_RE.sub("", text)
+    text = re.sub(r"[`*_]", "", text)
+    return text.strip().strip("\"'")
 
 
 def _sanitize_title(raw: str, fallback_text: str = "") -> str:
@@ -415,15 +424,20 @@ def _sanitize_title(raw: str, fallback_text: str = "") -> str:
     frontmatter block. If the result still reads as the model
     commenting on its own task rather than doing it, fall back to the
     raw first message's own words instead - always more useful than a
-    meta-description, however trivial."""
-    first_line = raw.strip().splitlines()[0] if raw.strip() else ""
-    first_line = _strip_title_markers(first_line)
-    first_line = re.sub(r"\s+", " ", first_line)
+    meta-description, however trivial. Finally, never let a
+    phone/email/jid-shaped string (ADR-0009) reach the title - real
+    observed output was a bare "919244352208@s.whatsapp.net →" as a
+    "title", echoed straight out of the transcript's own "sender: text"
+    lines."""
 
+    def _first_line(text: str) -> str:
+        cleaned = _strip_title_markers(text)
+        line = cleaned.splitlines()[0] if cleaned.strip() else ""
+        return re.sub(r"\s+", " ", line).strip()
+
+    first_line = _first_line(raw)
     if not first_line or _looks_like_meta_commentary(first_line):
-        first_line = fallback_text.strip().splitlines()[0] if fallback_text.strip() else ""
-        first_line = _strip_title_markers(first_line)
-        first_line = re.sub(r"\s+", " ", first_line)
+        first_line = _first_line(fallback_text)
 
     words = first_line.split(" ")
     if len(words) > _TITLE_MAX_WORDS:
@@ -431,13 +445,17 @@ def _sanitize_title(raw: str, fallback_text: str = "") -> str:
     if len(first_line) > _TITLE_MAX_CHARS:
         head = first_line[:_TITLE_MAX_CHARS]
         first_line = (head.rsplit(" ", 1)[0] if " " in head else head).rstrip(",.;:- ")
-    return first_line or "Untitled thread"
+
+    if not first_line or contains_pii(first_line):
+        return "Untitled thread"
+    return first_line
 
 
 def _sanitize_summary(raw: str) -> str:
     text = re.sub(r"\s+", " ", raw.strip())
     if _looks_like_meta_commentary(text):
         return ""  # meta-commentary is worse than an empty Summary section
+    text = redact_pii(text)  # ADR-0009: no phone/email-shaped strings in the wiki
     if len(text) > _SUMMARY_MAX_CHARS:
         head = text[:_SUMMARY_MAX_CHARS]
         text = (head.rsplit(". ", 1)[0] + "." if ". " in head else head).rstrip()

@@ -357,6 +357,39 @@ def test_sanitize_title_strips_leading_bullet_markers():
     assert wa_agent._sanitize_title("1. Moving the demo") == "Moving the demo"
 
 
+def test_sanitize_title_strips_label_preambles_and_markdown():
+    """Real observed output: "**Message summary:** An incoming message" -
+    a markdown-bolded label preamble, not a title."""
+    title = wa_agent._sanitize_title("**Message summary:** An incoming message about billing")
+    assert title == "An incoming message about billing"
+    assert "*" not in title
+    assert ":" not in title
+
+    fenced = wa_agent._sanitize_title("```\nBooking the hall\n```")
+    assert fenced == "Booking the hall"
+
+    just_a_fence = wa_agent._sanitize_title("```", fallback_text="book the seminar hall")
+    assert just_a_fence == "book the seminar hall"
+
+
+def test_sanitize_title_never_leaks_a_phone_or_jid():
+    """Real observed output: "919244352208@s.whatsapp.net ->" as a
+    title, echoed straight out of the transcript's "sender: text" lines
+    (ADR-0009: no phone/email-shaped strings in the wiki)."""
+    assert wa_agent._sanitize_title("919244352208@s.whatsapp.net →") == "Untitled thread"
+    assert wa_agent._sanitize_title("", fallback_text="919244352208@s.whatsapp.net") == "Untitled thread"
+    assert wa_agent._sanitize_title("+91 98765 43210 called about the venue") == "Untitled thread"
+
+
+def test_sanitize_summary_redacts_pii_instead_of_dropping_the_whole_thing():
+    summary = wa_agent._sanitize_summary(
+        "A contact (919244352208@s.whatsapp.net) asked about the venue booking."
+    )
+    assert "919244352208" not in summary
+    assert "[redacted]" in summary
+    assert "venue booking" in summary
+
+
 def test_sanitize_title_falls_back_when_model_comments_on_its_own_task():
     """Real observed failure, even with explicit anti-acknowledgement
     instructions in the prompt: the model describes the framing instead
