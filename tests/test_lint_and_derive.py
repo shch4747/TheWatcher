@@ -93,17 +93,20 @@ def test_set_derived_section_rejects_non_derived_owner():
 
 
 def test_set_derived_section_replaces_only_that_section():
+    """`new_body` is the inner content only - set_derived_section wraps
+    it in the `watcher:derived` fence itself (same convention as
+    replace_managed_section), so callers never hand-build the markers."""
     page = parse_page((FIXTURES / "project_watcher.md").read_text())
     original_brief = page.section("Brief").body
 
-    new_body = "<!-- watcher:derived -->\nnew threads\n<!-- /watcher -->\n"
-    updated = set_derived_section(page, "Threads", new_body)
+    expected = "<!-- watcher:derived -->\nnew threads\n<!-- /watcher -->\n"
+    updated = set_derived_section(page, "Threads", "new threads")
 
-    assert updated.section("Threads").body == new_body
+    assert updated.section("Threads").body == expected
     assert updated.section("Brief").body == original_brief
     # dump still parses back cleanly
     round_tripped = parse_page(dump_page(updated))
-    assert round_tripped.section("Threads").body == new_body
+    assert round_tripped.section("Threads").body == expected
 
 
 def test_render_members_index():

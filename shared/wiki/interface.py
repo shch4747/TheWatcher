@@ -18,6 +18,7 @@ from shared.wiki.derive import (
     replace_managed_section,
     set_derived_section,
     set_frontmatter_field,
+    set_h1_title,
 )
 from shared.wiki.items import Item, format_item_line, parse_item_line, parse_items
 from shared.wiki.lapis_client import (
@@ -40,6 +41,7 @@ from shared.wiki.templates import (
     render_new_project_page,
     render_new_thread_page,
     slugify,
+    yaml_str,
 )
 
 __all__ = [
@@ -76,6 +78,7 @@ __all__ = [
     "render_readme",
     "set_derived_section",
     "set_frontmatter_field",
+    "set_h1_title",
     "append_to_section",
     "replace_managed_section",
     "render_new_channel_page",
@@ -84,4 +87,5 @@ __all__ = [
     "render_new_project_page",
     "render_new_thread_page",
     "slugify",
+    "yaml_str",
 ]

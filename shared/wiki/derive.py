@@ -23,23 +23,30 @@ class NotDerivedError(ValueError):
 
 
 def set_derived_section(page: Page, title: str, new_body: str) -> Page:
+    """Wholesale rewrite of a derived section's fenced content - same
+    fence convention as `replace_managed_section` (`<!-- watcher:derived
+    -->`), so lint and a human reading the raw file can tell at a glance
+    this section is machine-owned, same as managed/append ones."""
     owner = owner_of(page.page_type, title)
     if owner != "derived":
         raise NotDerivedError(
             f"section {title!r} on a {page.page_type} page is owned by {owner!r}, not derived"
         )
 
+    fenced_body = f"<!-- watcher:derived -->\n{new_body}\n<!-- /watcher -->\n"
     target_canonical = canonical_section_title(page.page_type, title)
     new_sections = []
     replaced = False
     for section in page.sections:
         if canonical_section_title(page.page_type, section.title) == target_canonical:
-            new_sections.append(Section(title=section.title, header_raw=section.header_raw, body=new_body))
+            new_sections.append(
+                Section(title=section.title, header_raw=section.header_raw, body=fenced_body)
+            )
             replaced = True
         else:
             new_sections.append(section)
     if not replaced:
-        new_sections.append(Section(title=title, header_raw=f"## {title}\n", body=new_body))
+        new_sections.append(Section(title=title, header_raw=f"## {title}\n", body=fenced_body))
 
     return Page(
         page_type=page.page_type,
@@ -47,6 +54,27 @@ def set_derived_section(page: Page, title: str, new_body: str) -> Page:
         frontmatter_raw=page.frontmatter_raw,
         preamble=page.preamble,
         sections=new_sections,
+    )
+
+
+_H1_RE = re.compile(r"^#[ \t]+.*$", re.MULTILINE)
+
+
+def set_h1_title(page: Page, new_title: str) -> Page:
+    """Replace the page's `# Title` heading (the preamble line before
+    the first `##` section) - used when a title is regenerated for an
+    existing page (e.g. a thread retitled on a later batch), so the
+    heading a human actually reads never drifts from `frontmatter.title`."""
+    if _H1_RE.search(page.preamble):
+        new_preamble = _H1_RE.sub(f"# {new_title}", page.preamble, count=1)
+    else:
+        new_preamble = f"# {new_title}\n" + page.preamble
+    return Page(
+        page_type=page.page_type,
+        frontmatter=page.frontmatter,
+        frontmatter_raw=page.frontmatter_raw,
+        preamble=new_preamble,
+        sections=page.sections,
     )
 
 
