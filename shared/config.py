@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     batch_n: int = 40
     batch_t_minutes: float = 180.0
     batch_quiet_minutes: float = 5.0
+    message_concat_window_minutes: float = 2.0
+    thread_context_max_chars: int = 400
     thread_stale_days: float = 3.0
     thread_silent_days: float = 7.0
     lapis_base_url: str = "https://lapis.dvenom.in"

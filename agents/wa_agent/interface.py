@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from shared.config import settings
 from shared.db import Channel, MessageBuffer, Notice, OutboundLog, aware_utc, get_session
 from shared.gateway.interface import (
@@ -34,8 +35,11 @@ from shared.wiki.interface import (
     parse_page,
     render_new_thread_page,
     replace_managed_section,
+    set_derived_section,
     set_frontmatter_field,
+    set_h1_title,
     slugify,
+    yaml_str,
 )
 from sqlalchemy import select
 
@@ -50,6 +54,7 @@ def _extract_message(payload: dict) -> dict:
         "text": event.text,
         "sender": event.sender or "unknown",
         "timestamp": event.timestamp,
+        "replied_to_id": event.replied_to_id,
     }
 
 
@@ -61,6 +66,17 @@ class BufferedMessage:
     received_at: datetime
     text: str
     sender: str
+    replied_to_id: str | None = None
+    # Raw gowa message ids this logical message represents - itself
+    # plus any same-sender plain messages concatenated onto it
+    # (_concatenate_same_sender). Populated with [message_id] the first
+    # time a BufferedMessage is built; every [src:: ...] tag and
+    # processed-marking downstream uses this, not message_id alone.
+    src_ids: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.src_ids:
+            self.src_ids = [self.message_id]
 
 
 @dataclass
@@ -70,6 +86,10 @@ class ThreadInfo:
     title: str
     summary: str
     state: str
+    # Last few Timeline lines, capped at settings.thread_context_max_chars
+    # - what a Decision Model/Worker Choice call actually sees to judge
+    # whether a new message continues this thread (list_active_threads).
+    recent_context: str = ""
 
 
 @dataclass
@@ -119,6 +139,7 @@ async def _unprocessed_messages(channel: str) -> list[BufferedMessage]:
                 received_at=received_at,
                 text=fields["text"],
                 sender=fields["sender"],
+                replied_to_id=fields["replied_to_id"],
             )
         )
     return out
@@ -141,6 +162,63 @@ async def cut_batch(
     return messages[: settings.batch_n] if len(messages) > settings.batch_n else messages
 
 
+def _concatenate_same_sender(messages: list[BufferedMessage]) -> list[BufferedMessage]:
+    """Same-sender plain (non-reply) messages within
+    MESSAGE_CONCAT_WINDOW_MINUTES of the immediately preceding message
+    fold into one logical message before classification - a quick burst
+    of follow-ups ("wait", "actually let's do Friday") reads as one
+    message with one Choice call, not several independent ones that can
+    each land in a different thread. A message that IS a reply never
+    folds into a preceding run (it gets its own reply-based routing);
+    the rolling gap is measured against the true previous raw message,
+    not the group's start time, so a long burst of quick messages
+    doesn't get cut off just because it collectively spans more than
+    the window."""
+    if not messages:
+        return []
+    window = timedelta(minutes=settings.message_concat_window_minutes)
+    merged: list[BufferedMessage] = []
+    last_raw_time: datetime | None = None
+    for m in messages:
+        if (
+            merged
+            and m.sender == merged[-1].sender
+            and m.replied_to_id is None
+            and last_raw_time is not None
+            and m.received_at - last_raw_time <= window
+        ):
+            prev = merged[-1]
+            merged[-1] = replace(
+                prev, text=f"{prev.text}\n{m.text}", src_ids=[*prev.src_ids, *m.src_ids]
+            )
+        else:
+            merged.append(m)
+        last_raw_time = m.received_at
+    return merged
+
+
+def _recent_timeline_excerpt(timeline_body: str) -> str:
+    """Last few Timeline lines, capped by character budget (not line
+    count) - the thread page doesn't keep raw messages separately, so
+    this is the cheapest way to give a Choice call a "recent messages"
+    excerpt without re-reading `messages_buffer`."""
+    lines = [
+        line.strip()
+        for line in timeline_body.splitlines()
+        if line.strip().startswith("- ") and "<!--" not in line
+    ]
+    budget = settings.thread_context_max_chars
+    picked: list[str] = []
+    total = 0
+    for line in reversed(lines):
+        total += len(line) + 1
+        picked.append(line)
+        if total >= budget:
+            break
+    picked.reverse()
+    return "\n".join(picked)
+
+
 async def list_active_threads(vault: VaultClient, channel_dir: str) -> list[ThreadInfo]:
     """Active AND stale threads - stale ones must still be assignable so
     a new message can revive them (Spec: "stale ... revivable")."""
@@ -155,11 +233,15 @@ async def list_active_threads(vault: VaultClient, channel_dir: str) -> list[Thre
         if page.page_type != "thread" or state not in ("active", "stale"):
             continue
         summary_section = page.section("Summary")
+        timeline_section = page.section("Timeline")
         threads.append(
             ThreadInfo(
                 slug=page.frontmatter.slug,
                 path=path,
                 title=page.frontmatter.title,
+                recent_context=_recent_timeline_excerpt(
+                    timeline_section.body if timeline_section else ""
+                ),
                 summary=(summary_section.body if summary_section else "").strip(),
                 state=state,
             )
@@ -167,40 +249,80 @@ async def list_active_threads(vault: VaultClient, channel_dir: str) -> list[Thre
     return threads
 
 
+def _thread_context(thread: ThreadInfo) -> str:
+    """The description a Choice option gets for this thread - title,
+    Summary, and a recent-messages excerpt, so the Decision Model has
+    something real to judge relevance against instead of a bare slug
+    (which is what made this decision effectively random before)."""
+    parts = [thread.title]
+    if thread.summary:
+        parts.append(f"Summary: {thread.summary}")
+    if thread.recent_context:
+        parts.append(f"Recent messages: {thread.recent_context}")
+    return " | ".join(parts)
+
+
 async def assign_messages_to_threads(
     messages: list[BufferedMessage],
     active_threads: list[ThreadInfo],
     decision_client: DecisionModelProtocol,
     worker_client: TextModelClient,
+    vault: VaultClient,
+    channel_dir: str,
 ) -> dict[str, list[BufferedMessage]]:
     """One Decision Model Choice per message over {each active thread,
-    new-thread, chatter}, Worker fallback below threshold (Spec). New-
-    thread messages are grouped consecutively into one new thread each -
-    a practical batch-level heuristic, not a claim that two "new-thread"
-    messages far apart in the batch are unrelated.
+    new-thread, chatter} - Worker fallback below threshold (Spec) - with
+    two deterministic short-circuits ahead of the Choice call:
+
+    - a message that's a WhatsApp reply to another message goes
+      straight to that message's thread (checked first against
+      messages already assigned earlier in this same batch, then
+      against persisted thread pages via `find_thread_by_src_id`) -
+      never asking the Decision Model at all.
+    - every remaining Choice call sees real per-thread context (title +
+      Summary + a recent-messages excerpt, `_thread_context`) instead
+      of a bare slug.
+
+    New-thread messages are grouped consecutively into one new thread
+    each - a practical batch-level heuristic, not a claim that two
+    "new-thread" messages far apart in the batch are unrelated.
     """
-    options = [t.slug for t in active_threads] + [NEW_THREAD, CHATTER]
+    options: dict[str, str | None] = {t.slug: _thread_context(t) for t in active_threads}
+    options[NEW_THREAD] = "Start a brand new thread - this isn't a continuation of any thread above."
+    options[CHATTER] = "Casual chatter / not worth tracking as a thread."
+
     buckets: dict[str, list[BufferedMessage]] = {}
+    src_to_key: dict[str, str] = {}
     new_thread_counter = 0
     last_was_new_thread = False
 
     for message in messages:
-        question = f"Which thread does this message belong to?\n\nMessage: {message.text}"
-        result = await decide_with_fallback(decision_client, worker_client, question, options)
-        choice = result.option
+        choice = src_to_key.get(message.replied_to_id) if message.replied_to_id else None
+        if choice is None and message.replied_to_id:
+            found = await find_thread_by_src_id(vault, channel_dir, message.replied_to_id)
+            choice = found.slug if found else None
+
+        if choice is None:
+            question = f"Which thread does this message belong to?\n\nMessage: {message.text}"
+            result = await decide_with_fallback(decision_client, worker_client, question, options)
+            choice = result.option
 
         if choice == CHATTER:
             buckets.setdefault(CHATTER, []).append(message)
             last_was_new_thread = False
-        elif choice == NEW_THREAD:
-            if not last_was_new_thread:
-                new_thread_counter += 1
-            key = f"{NEW_THREAD}:{new_thread_counter}"
-            buckets.setdefault(key, []).append(message)
+        elif choice == NEW_THREAD or choice.startswith(f"{NEW_THREAD}:"):
+            if choice == NEW_THREAD:
+                if not last_was_new_thread:
+                    new_thread_counter += 1
+                choice = f"{NEW_THREAD}:{new_thread_counter}"
+            buckets.setdefault(choice, []).append(message)
             last_was_new_thread = True
         else:
             buckets.setdefault(choice, []).append(message)
             last_was_new_thread = False
+
+        for src_id in message.src_ids:
+            src_to_key[src_id] = choice
 
     return buckets
 
@@ -208,7 +330,8 @@ async def assign_messages_to_threads(
 def _timeline_line(message: BufferedMessage, member_title: str | None) -> str:
     who = f"[[{member_title}]]" if member_title else message.sender
     ts = message.received_at.strftime("%Y-%m-%d %H:%M")
-    return f"- {ts} — {who} {message.text} [src:: {message.message_id}]"
+    src = ", ".join(message.src_ids)
+    return f"- {ts} — {who} {message.text} [src:: {src}]"
 
 
 async def _timeline_lines(messages: list[BufferedMessage]) -> list[str]:
@@ -236,7 +359,8 @@ _TRANSCRIPT_PREAMBLE = (
     "that they're trivial.\n\n<transcript>\n{transcript}\n</transcript>"
 )
 
-_TITLE_MAX_CHARS = 80
+_TITLE_MAX_WORDS = 5
+_TITLE_MAX_CHARS = 60  # safety net for pathologically long "words" (no spaces)
 _SUMMARY_MAX_CHARS = 800
 # extract-items' grammar (SKILL.md): every real item carries a
 # [kind:: ...] and at least one [src:: id]; a bare "- " line without
@@ -268,13 +392,16 @@ def _looks_like_meta_commentary(title: str) -> bool:
 def _sanitize_title(raw: str, fallback_text: str = "") -> str:
     """A title is frontmatter metadata and a slug source, not free
     prose - collapse to one line, strip wrapping quotes/markdown, and
-    cap length. This is a content-quality guard (catches a merely
-    long-winded but well-behaved title); `shared.wiki.templates.yaml_str`
-    is the separate structural guard that keeps any title, sanitized or
-    not, from corrupting the frontmatter block. If the result still
-    reads as the model commenting on its own task rather than doing it,
-    fall back to the raw first message's own words instead - always
-    more useful than a meta-description, however trivial."""
+    cap it to `_TITLE_MAX_WORDS` words (skills/name-thread/SKILL.md:
+    "minimal, up to 5 words, reflecting the overall theme"), with a
+    char-count safety net for pathological single "words". This is a
+    content-quality guard (catches a merely long-winded but well-behaved
+    title); `shared.wiki.templates.yaml_str` is the separate structural
+    guard that keeps any title, sanitized or not, from corrupting the
+    frontmatter block. If the result still reads as the model
+    commenting on its own task rather than doing it, fall back to the
+    raw first message's own words instead - always more useful than a
+    meta-description, however trivial."""
     first_line = raw.strip().splitlines()[0] if raw.strip() else ""
     first_line = first_line.strip().strip("\"'").strip("*_ ")
     first_line = re.sub(r"\s+", " ", first_line)
@@ -283,6 +410,9 @@ def _sanitize_title(raw: str, fallback_text: str = "") -> str:
         first_line = fallback_text.strip().splitlines()[0] if fallback_text.strip() else ""
         first_line = re.sub(r"\s+", " ", first_line)
 
+    words = first_line.split(" ")
+    if len(words) > _TITLE_MAX_WORDS:
+        first_line = " ".join(words[:_TITLE_MAX_WORDS]).rstrip(",.;:- ")
     if len(first_line) > _TITLE_MAX_CHARS:
         head = first_line[:_TITLE_MAX_CHARS]
         first_line = (head.rsplit(" ", 1)[0] if " " in head else head).rstrip(",.;:- ")
@@ -315,11 +445,14 @@ async def _generate_summary_and_items(
     worker_client: TextModelClient,
     skills: dict,
 ) -> tuple[str, str]:
-    transcript = "\n".join(f"[{m.message_id}] {m.sender}: {m.text}" for m in messages)
+    transcript = "\n".join(f"[{','.join(m.src_ids)}] {m.sender}: {m.text}" for m in messages)
     wrapped = _TRANSCRIPT_PREAMBLE.format(transcript=transcript)
 
     summary_skill = skills.get("summarise-thread")
-    summary_prompt = f"Current summary (may be empty):\n{existing_summary}\n\n{wrapped}"
+    summary_prompt = (
+        f"Current summary (may be empty; keep it if nothing material changed):\n"
+        f"{existing_summary}\n\n{wrapped}"
+    )
     summary_result = await generate(
         worker_client, "worker", summary_prompt, system=summary_skill.instructions if summary_skill else None
     )
@@ -331,16 +464,29 @@ async def _generate_summary_and_items(
     return _sanitize_summary(summary_result.text), _sanitize_items(items_result.text)
 
 
-async def _mint_title(messages: list[BufferedMessage], worker_client: TextModelClient, skills: dict) -> str:
+async def _mint_title(
+    messages: list[BufferedMessage], worker_client: TextModelClient, skills: dict, existing_title: str = ""
+) -> str:
+    """Retitles a thread from its messages - called for a brand new
+    thread (`existing_title=""`) and, every batch, for an existing
+    thread too (Spec, per user: "run an LLM call for generating updated
+    summary and title... change is not exactly necessary" - the old
+    title is passed as context and the skill is told to keep it unless
+    the theme genuinely shifted)."""
     naming_skill = skills.get("name-thread")
     transcript = "\n".join(f"{m.sender}: {m.text}" for m in messages)
+    context = (
+        f"Current title (keep it if the topic hasn't changed): {existing_title}\n\n"
+        if existing_title
+        else ""
+    )
     result = await generate(
         worker_client,
         "worker",
-        _TRANSCRIPT_PREAMBLE.format(transcript=transcript),
+        context + _TRANSCRIPT_PREAMBLE.format(transcript=transcript),
         system=naming_skill.instructions if naming_skill else None,
     )
-    return _sanitize_title(result.text, fallback_text=messages[0].text)
+    return _sanitize_title(result.text, fallback_text=existing_title or messages[0].text)
 
 
 async def _mark_processed(rows: list[BufferedMessage]) -> None:
@@ -401,13 +547,17 @@ async def run_batch(
 
     channel_dir = slugify(channel.title or channel_jid)
     active_threads = await list_active_threads(vault, channel_dir)
-    buckets = await assign_messages_to_threads(messages, active_threads, decision_client, worker_client)
+    merged_messages = _concatenate_same_sender(messages)
+    buckets = await assign_messages_to_threads(
+        merged_messages, active_threads, decision_client, worker_client, vault, channel_dir
+    )
 
     repo_skills_dir = skills_dir or (Path(__file__).resolve().parents[2] / "skills")
     skills = load_skills(repo_skills_dir)
 
     result = BatchResult(channel=channel_jid, message_count=len(messages))
     threads_by_slug = {t.slug: t for t in active_threads}
+    touched_channel = False
 
     for key, bucket_messages in buckets.items():
         if key == CHATTER:
@@ -415,6 +565,7 @@ async def run_batch(
             continue
 
         timeline_lines = await _timeline_lines(bucket_messages)
+        last_message_at = bucket_messages[-1].received_at.isoformat()
 
         if key.startswith(f"{NEW_THREAD}:"):
             title = await _mint_title(bucket_messages, worker_client, skills)
@@ -432,28 +583,41 @@ async def run_batch(
                 items_text=items_text,
                 timeline_lines=timeline_lines,
                 participants=participants,
-                message_ids=[m.message_id for m in bucket_messages],
+                message_ids=[src_id for m in bucket_messages for src_id in m.src_ids],
             )
             await vault.write(f"channels/{channel_dir}/{slug}.md", page_text, base_revision="")
             result.threads_created.append(slug)
             await _post_notice(channel, slug, bucket_messages[-1].message_id)
+            touched_channel = True
         else:
             thread = threads_by_slug[key]
             existing = await vault.read(thread.path)
             page = parse_page(existing.content)
+            title = await _mint_title(bucket_messages, worker_client, skills, existing_title=thread.title)
             summary, items_text = await _generate_summary_and_items(
                 bucket_messages, thread.summary, worker_client, skills
             )
+            if title != thread.title:
+                page = set_frontmatter_field(page, "title", yaml_str(title))
+                page = set_h1_title(page, title)
             page = replace_managed_section(page, "Summary", summary)
             page = replace_managed_section(page, "Items", items_text)
             page = append_to_section(page, "Timeline", timeline_lines)
+            page = set_frontmatter_field(page, "last_message_at", last_message_at)
             if thread.state == "stale":
-                # a new message revives a stale thread (Spec: "revivable")
+                # a new message revives a stale thread (Spec: "revivable") -
+                # last_message_at above is what keeps it revived: without
+                # bumping it, the next lifecycle_tick would just see the
+                # same stale timestamp and mark it stale again immediately.
                 page = set_frontmatter_field(page, "state", "active")
                 result.threads_revived.append(key)
             await vault.write(thread.path, dump_page(page), base_revision=existing.revision)
             result.threads_updated.append(key)
             await _post_notice(channel, key, bucket_messages[-1].message_id)
+            touched_channel = True
+
+    if touched_channel:
+        await regenerate_channel_threads_index(vault, channel, channel_dir)
 
     await _mark_processed(messages)
     await _advance_cursor(channel_jid, messages[-1].message_id)
@@ -462,6 +626,55 @@ async def run_batch(
 
 def _lapis_link(path: str) -> str:
     return f"{settings.lapis_base_url}/vault/{settings.lapis_vault_id}/file/{path}"
+
+
+async def regenerate_channel_threads_index(vault: VaultClient, channel: Channel, channel_dir: str) -> None:
+    """Rewrite the channel's own page's Active/Stale/Archived threads
+    sections from what's actually in the vault right now. Called after
+    every thread create/update/stale/revive/archive so a Bot Admin
+    browsing the channel page in Lapis sees current links immediately,
+    not on some later, unrelated schedule. A channel with no page yet
+    (nothing has backfilled it via `/setup <kind>`) is a no-op, not an
+    error - there's nothing to write into."""
+    page_path = f"channels/{slugify(channel.title or channel.jid)}.md"
+    try:
+        existing = await vault.read(page_path)
+    except (FileNotFoundError, OSError, httpx.HTTPStatusError):
+        return
+    page = parse_page(existing.content)
+    if page.page_type != "channel":
+        return
+
+    active_lines: list[str] = []
+    stale_lines: list[str] = []
+    for path in await vault.list(f"channels/{channel_dir}"):
+        if "/archive/" in path or path.count("/") < 2:
+            continue
+        result = await vault.read(path)
+        thread_page = parse_page(result.content)
+        if thread_page.page_type != "thread":
+            continue
+        line = f"- [{thread_page.frontmatter.title}]({_lapis_link(path)})"
+        state = getattr(thread_page.frontmatter, "state", None)
+        if state == "active":
+            active_lines.append(line)
+        elif state == "stale":
+            stale_lines.append(line)
+
+    archived_lines: list[str] = []
+    for path in await vault.list(f"channels/archive/{channel_dir}"):
+        if path.count("/") < 3:
+            continue
+        result = await vault.read(path)
+        thread_page = parse_page(result.content)
+        if thread_page.page_type != "thread":
+            continue
+        archived_lines.append(f"- [{thread_page.frontmatter.title}]({_lapis_link(path)})")
+
+    page = set_derived_section(page, "Active threads", "\n".join(active_lines))
+    page = set_derived_section(page, "Stale threads", "\n".join(stale_lines))
+    page = set_derived_section(page, "Archived threads", "\n".join(archived_lines))
+    await vault.write(page_path, dump_page(page), base_revision=existing.revision)
 
 
 async def check_and_mark_stale(
@@ -519,6 +732,8 @@ async def run_lifecycle_for_channel(vault: VaultClient, channel_jid: str) -> dic
     channel_dir = slugify(channel.title or channel_jid)
     stale = await check_and_mark_stale(vault, channel_dir)
     archived = await archive_ended_threads(vault, channel_dir)
+    if stale or archived:
+        await regenerate_channel_threads_index(vault, channel, channel_dir)
     return {"stale": stale, "archived": archived}
 
 
@@ -589,9 +804,13 @@ def is_write_request(text: str) -> bool:
 
 
 async def find_thread_by_src_id(vault: VaultClient, channel_dir: str, src_id: str) -> ThreadInfo | None:
+    """A plain substring check, not an exact `[src:: id]` match - a
+    Timeline line can carry more than one id (`[src:: id1, id2]`, from
+    same-sender message concatenation), and a reply can target any of
+    them, not just the first."""
     for thread in await list_active_threads(vault, channel_dir):
         result = await vault.read(thread.path)
-        if f"[src:: {src_id}" in result.content or f"[src:: {src_id}]" in result.content:
+        if src_id in result.content:
             return thread
     return None
 
@@ -617,7 +836,7 @@ async def identify_thread(
     if len(active_threads) == 1:
         return active_threads[0]
 
-    options = [t.slug for t in active_threads]
+    options: dict[str, str | None] = {t.slug: _thread_context(t) for t in active_threads}
     question = f"Which active thread is this chat message about?\n\nMessage: {text}"
     result = await decide_with_fallback(decision_client, worker_client, question, options)
     return next((t for t in active_threads if t.slug == result.option), active_threads[0])

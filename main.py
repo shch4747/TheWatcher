@@ -18,6 +18,7 @@ from agents.wa_agent.interface import (
     archive_ended_threads,
     check_and_mark_stale,
     handle_chat_message,
+    regenerate_channel_threads_index,
     run_batch,
     sunday_stale_nudge,
 )
@@ -61,8 +62,10 @@ async def _lifecycle_tick() -> None:
     vault = default_vault_client()
     for channel in await list_channels():
         channel_dir = slugify(channel.title or channel.jid)
-        await check_and_mark_stale(vault, channel_dir)
-        await archive_ended_threads(vault, channel_dir)
+        stale = await check_and_mark_stale(vault, channel_dir)
+        archived = await archive_ended_threads(vault, channel_dir)
+        if stale or archived:
+            await regenerate_channel_threads_index(vault, channel, channel_dir)
 
 
 async def _sunday_nudge_tick() -> None:
