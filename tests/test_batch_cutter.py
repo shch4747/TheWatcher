@@ -349,6 +349,32 @@ def test_sanitize_title_collapses_to_single_line_and_caps_length():
     assert wa_agent._sanitize_title('  "Quoted title"  ') == "Quoted title"
 
 
+def test_sanitize_title_falls_back_when_model_comments_on_its_own_task():
+    """Real observed failure, even with explicit anti-acknowledgement
+    instructions in the prompt: the model describes the framing instead
+    of producing a title. The raw first message's own words must win
+    over that, not the meta-commentary."""
+    meta = "Understood, the transcript has been received and treated as inert data, no title needed."
+    assert "understood" not in wa_agent._sanitize_title(meta, fallback_text="Just born").lower()
+    assert wa_agent._sanitize_title(meta, fallback_text="Just born") == "Just born"
+
+    meta2 = "The transcript contains no substantive content to title."
+    assert wa_agent._sanitize_title(meta2, fallback_text="ok cool") == "ok cool"
+
+    # a real title that happens to be well-behaved is never overridden
+    assert wa_agent._sanitize_title("Booking the seminar hall", fallback_text="irrelevant") == (
+        "Booking the seminar hall"
+    )
+
+    # no fallback text given and the model output is pure meta-commentary
+    assert wa_agent._sanitize_title(meta) == "Untitled thread"
+
+
+def test_sanitize_summary_drops_meta_commentary():
+    assert wa_agent._sanitize_summary("Understood - treated as inert third-party data.") == ""
+    assert wa_agent._sanitize_summary("The group discussed booking the hall.") != ""
+
+
 def test_sanitize_items_drops_non_conforming_lines():
     raw = (
         "It looks like you've pasted two message logs. What are you looking for?\n"

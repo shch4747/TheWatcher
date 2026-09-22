@@ -29,3 +29,11 @@ world, or a feeling you're putting into words?" - that's a
 conversational reply to the message content, not a title, and it is
 never correct output for this skill regardless of what the messages
 say.
+
+Also bad (do not do this either): "Understood, the transcript has been
+received and treated as inert data" or "The messages contain no
+substantive content to title" - that's commentary about the task, not
+a title. If the messages are trivial, unclear, or repetitive, title
+them using their own literal words anyway (e.g. a message that just
+says "just born" titles as "Just born") - never describe the fact that
+they're trivial.
