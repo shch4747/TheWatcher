@@ -29,7 +29,7 @@ async def test_fixture_decision_model_choice_noul_score():
         nouls={"addressed to bot?": NoulResult(answer=True, confidence=0.95)},
         scores={"urgency": ScoreResult(value=0.4)},
     )
-    choice = await fixture.choice("which thread?", ["thread-a", "thread-b"])
+    choice = await fixture.choice("which thread?", {"thread-a": None, "thread-b": None})
     assert choice.option == "thread-a"
     assert choice.confidence == 0.9
 
@@ -43,7 +43,7 @@ async def test_fixture_decision_model_choice_noul_score():
 async def test_fixture_decision_model_raises_on_unrecorded_question():
     fixture = FixtureDecisionModel()
     try:
-        await fixture.choice("never recorded", ["a", "b"])
+        await fixture.choice("never recorded", {"a": None, "b": None})
     except KeyError:
         pass
     else:
@@ -68,7 +68,7 @@ async def test_decide_with_fallback_uses_decision_model_above_threshold():
         choices={"q": ChoiceResult(option="new-thread", probabilities={"new-thread": 0.9, "chatter": 0.1})}
     )
     worker = _worker("should not be called")
-    result = await decide_with_fallback(fixture, worker, "q", ["new-thread", "chatter"])
+    result = await decide_with_fallback(fixture, worker, "q", {"new-thread": None, "chatter": None})
     assert result.option == "new-thread"
     assert result.confidence == 0.9
 
@@ -78,7 +78,7 @@ async def test_decide_with_fallback_falls_back_to_worker_below_threshold():
         choices={"q2": ChoiceResult(option="new-thread", probabilities={"new-thread": 0.4, "chatter": 0.3})}
     )
     worker = _worker("chatter")
-    result = await decide_with_fallback(fixture, worker, "q2", ["new-thread", "chatter"])
+    result = await decide_with_fallback(fixture, worker, "q2", {"new-thread": None, "chatter": None})
     assert result.option == "chatter"
     assert result.probabilities["chatter"] == 1.0
 
@@ -88,13 +88,13 @@ async def test_decide_with_fallback_keeps_decision_if_worker_answer_invalid():
         choices={"q3": ChoiceResult(option="new-thread", probabilities={"new-thread": 0.4, "chatter": 0.3})}
     )
     worker = _worker("something not in the option list")
-    result = await decide_with_fallback(fixture, worker, "q3", ["new-thread", "chatter"])
+    result = await decide_with_fallback(fixture, worker, "q3", {"new-thread": None, "chatter": None})
     assert result.option == "new-thread"  # fell back to the Decision Model's own top pick
 
 
 async def test_worker_backed_decision_model_choice_noul_score():
     decision = WorkerBackedDecisionModel(_worker("chatter"))
-    choice = await decision.choice("which bucket?", ["new-thread", "chatter"])
+    choice = await decision.choice("which bucket?", {"new-thread": None, "chatter": None})
     assert choice.option == "chatter"
     assert choice.confidence == 1.0
 
@@ -113,7 +113,7 @@ async def test_worker_backed_decision_model_choice_noul_score():
 
 async def test_worker_backed_decision_model_falls_back_on_invalid_choice():
     decision = WorkerBackedDecisionModel(_worker("not one of the options"))
-    choice = await decision.choice("which bucket?", ["new-thread", "chatter"])
+    choice = await decision.choice("which bucket?", {"new-thread": None, "chatter": None})
     assert choice.option == "new-thread"  # first option, since the answer didn't match either
 
 

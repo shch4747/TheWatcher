@@ -40,7 +40,7 @@ from shared.models.text import TextModelClient
 
 
 class DecisionModelProtocol(Protocol):
-    async def choice(self, question: str, options: list[str]) -> ChoiceResult: ...
+    async def choice(self, question: str, options: dict[str, str | None]) -> ChoiceResult: ...
     async def noul(self, question: str) -> NoulResult: ...
     async def score(self, question: str) -> ScoreResult: ...
 
@@ -59,12 +59,15 @@ class JevClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self._client = AsyncTypeSafeClient(api_key=api_key, base_url=base_url)
 
-    async def choice(self, question: str, options: list[str]) -> ChoiceResult:
+    async def choice(self, question: str, options: dict[str, str | None]) -> ChoiceResult:
+        """`options` maps each option key to a human-readable
+        description (Jev's `criteria`) - `None` is a legal value for an
+        option needing no elaboration (e.g. "chatter"), but a bare list
+        of opaque keys with no description at all gives Jev nothing to
+        judge relevance against, which is why this takes a dict, not a
+        list."""
         response = await self._client.system_one(
-            state=question,
-            questions={
-                "result": Choice(instructions=question, criteria={option: None for option in options})
-            },
+            state=question, questions={"result": Choice(instructions=question, criteria=options)}
         )
         answer = response.choices["result"]
         return ChoiceResult(option=answer.choice, probabilities=dict(answer.probabilities))
@@ -117,12 +120,18 @@ class WorkerBackedDecisionModel:
     def __init__(self, worker_client: TextModelClient):
         self._worker = worker_client
 
-    async def choice(self, question: str, options: list[str]) -> ChoiceResult:
-        prompt = f"{question}\n\nPick exactly one of: {', '.join(options)}. Reply with only the option text."
+    async def choice(self, question: str, options: dict[str, str | None]) -> ChoiceResult:
+        option_lines = "\n".join(
+            f"- {opt}: {desc}" if desc else f"- {opt}" for opt, desc in options.items()
+        )
+        prompt = (
+            f"{question}\n\nOptions:\n{option_lines}\n\n"
+            "Reply with only the option name exactly as written above."
+        )
         result = await generate(self._worker, "worker", prompt)
         picked = result.text.strip()
         if picked not in options:
-            picked = options[0]
+            picked = next(iter(options))
         return ChoiceResult(option=picked, probabilities={picked: 1.0})
 
     async def noul(self, question: str) -> NoulResult:
@@ -169,7 +178,7 @@ class FixtureDecisionModel:
         self._nouls = nouls or {}
         self._scores = scores or {}
 
-    async def choice(self, question: str, options: list[str]) -> ChoiceResult:
+    async def choice(self, question: str, options: dict[str, str | None]) -> ChoiceResult:
         if question not in self._choices:
             raise KeyError(f"no fixture Choice response recorded for {question!r}")
         return self._choices[question]
