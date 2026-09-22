@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from shared.config import settings
 from shared.models.benchmark import BenchmarkCase, BenchmarkReport, ModelReport, run_benchmark
-from shared.models.calls import generate, log_model_call
+from shared.models.calls import generate, generate_structured, log_model_call
 from shared.models.decision import (
     DecisionModelProtocol,
     FixtureDecisionModel,
@@ -17,9 +17,10 @@ from shared.models.decision import (
     WorkerBackedDecisionModel,
     default_decision_client,
 )
-from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult, TextResult
+from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult, StructuredResult, TextResult
 from shared.models.skill_loader import Skill, load_skills, load_skills_from_dir, parse_skill_md
 from shared.models.text import TextModelClient, client_for_model, mentor_model, worker_model
+from shared.models.tokens import estimate_tokens
 
 
 async def decide_with_fallback(
@@ -36,8 +37,12 @@ async def decide_with_fallback(
     both the Decision Model and the Worker fallback see it, so neither
     is ever asked to choose among bare, undescribed option keys."""
     threshold = threshold if threshold is not None else settings.decision_confidence_threshold
+    # No logging here (ADR-0013): this used to write a hardcoded
+    # ModelCall("decision", "jev", 0, 0) on every call, even when
+    # `decision_client` was WorkerBackedDecisionModel - which logs its
+    # own real call - so every fallback decision was double-counted with
+    # one zero-token junk row. Each client now logs what it actually did.
     result = await decision_client.choice(question, options)
-    await log_model_call("decision", "jev", 0, 0)
 
     if result.confidence >= threshold:
         return result
@@ -61,6 +66,7 @@ __all__ = [
     "NoulResult",
     "ScoreResult",
     "TextResult",
+    "StructuredResult",
     "DecisionModelProtocol",
     "JevClient",
     "WorkerBackedDecisionModel",
@@ -72,6 +78,8 @@ __all__ = [
     "mentor_model",
     "log_model_call",
     "generate",
+    "generate_structured",
+    "estimate_tokens",
     "decide_with_fallback",
     "Skill",
     "load_skills",

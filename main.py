@@ -22,11 +22,13 @@ from agents.wa_agent.interface import (
     run_batch,
     sunday_stale_nudge,
 )
+from shared.config import settings
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
 from shared.gateway.interface import list_channels, notify_logs, register_message_hook
 from shared.models.decision import default_decision_client
-from shared.models.text import worker_model
+from shared.models.text import client_for_model, worker_model
+from shared.observability.interface import ingest_run, setup_tracing
 from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, run_job
 from shared.wiki.interface import default_vault_client, slugify
 
@@ -44,11 +46,29 @@ async def _chat_hook(payload: dict, channel_jid: str) -> None:
 
 
 async def _ingest_tick(force: bool = False) -> None:
+    """Structured ingestion (ADR-0012) - Worker model only, no Decision
+    Model. INGEST_MODEL_NAME swaps the model used for the assignment
+    and thread-update calls without touching the Worker elsewhere.
+
+    Wrapped in `ingest_run` (ADR-0013), which times each channel and
+    rolls its model calls up by phase into `obs_ingest_channel_runs`.
+    The report is *sent* from here rather than from inside
+    observability: that package must not import the gateway, or the
+    scheduler->observability->gateway->scheduler cycle closes."""
     vault = default_vault_client()
     worker = worker_model()
-    decision = default_decision_client(worker)
-    for channel in await list_channels():
-        await run_batch(channel.jid, vault, decision, worker, force=force)
+    assign_client = client_for_model(settings.ingest_model_name) if settings.ingest_model_name else None
+    async with ingest_run(forced=force) as run:
+        for channel in await list_channels():
+            async with run.channel(channel):
+                run.record(
+                    await run_batch(
+                        channel.jid, vault, worker, force=force, assign_client=assign_client
+                    )
+                )
+    report = run.report()
+    if report:
+        await notify_logs(report)
 
 
 async def _ingest_now() -> None:
@@ -147,6 +167,7 @@ async def main() -> None:
     # avoids a race where the scheduler loop's first tick queries the
     # DB before the app has had a chance to create the tables.
     await init_db()
+    setup_tracing()
     setup_jobs()
     config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)

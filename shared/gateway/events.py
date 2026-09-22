@@ -16,6 +16,7 @@ lives in exactly one place.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 
 @dataclass(frozen=True)
@@ -24,6 +25,10 @@ class GowaEvent:
     message_id: str | None
     chat_id: str | None
     sender: str | None
+    # WhatsApp display name, best-effort: gowa sends `sender_display_name`
+    # (resolved from contacts) and the legacy push name `from_name`;
+    # either can be missing. Never an identity - `sender` is the jid.
+    sender_name: str | None
     text: str
     timestamp: str | None
     replied_to_id: str | None
@@ -38,12 +43,37 @@ def parse_gowa_event(raw: dict) -> GowaEvent:
         message_id=body.get("id"),
         chat_id=body.get("chat_id"),
         sender=body.get("from"),
+        sender_name=body.get("sender_display_name") or body.get("from_name") or None,
         text=body.get("body", ""),
         timestamp=body.get("timestamp"),
         replied_to_id=body.get("replied_to_id"),
         reaction_emoji=body.get("reaction"),
         reacted_message_id=body.get("reacted_message_id"),
     )
+
+
+def parse_gowa_timestamp(value: object) -> datetime | None:
+    """gowa's `timestamp` is RFC3339 (`"2023-10-15T10:30:00Z"`), but be
+    tolerant of an epoch (int or digit string) too - the REST history
+    endpoint and the webhook don't come with the same guarantees, and a
+    timeline line with the ingest time is better than a crashed batch.
+    Always returns an aware UTC datetime, or None if unparseable."""
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value, UTC)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return datetime.fromtimestamp(int(text), UTC)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
 
 
 def wrap_backfilled_message(chat_message: dict) -> dict:
@@ -54,12 +84,21 @@ def wrap_backfilled_message(chat_message: dict) -> dict:
     everything downstream of `messages_buffer`) never needs to know
     which path a message arrived through.
     """
+    # Display name: the REST ChatMessage shape isn't pinned down the way
+    # the webhook one is, so take whichever name-ish key is present.
+    name = (
+        chat_message.get("sender_display_name")
+        or chat_message.get("sender_name")
+        or chat_message.get("push_name")
+        or chat_message.get("from_name")
+    )
     return {
         "event": "message.backfill",
         "payload": {
             "id": chat_message.get("id"),
             "chat_id": chat_message.get("chat_jid"),
             "from": chat_message.get("sender_jid"),
+            "from_name": name,
             "body": chat_message.get("content", ""),
             "timestamp": chat_message.get("timestamp"),
         },

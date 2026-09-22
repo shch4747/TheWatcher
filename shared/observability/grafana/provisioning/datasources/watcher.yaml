@@ -1,0 +1,22 @@
+# Grafana datasource provisioning (ADR-0013).
+#
+# The app's own SQLite database, read directly - the observability
+# tables live alongside the operational ones, so a panel can join
+# obs_ingest_channel_runs to channels without any ETL.
+#
+# The path is the container path from docker-compose.yml's
+# `watcher-data:/data` mount, not a host path.
+apiVersion: 1
+
+datasources:
+  - name: Watcher
+    uid: watcher-sqlite
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+    jsonData:
+      path: /data/watcher.db
+      # The app keeps the DB in WAL mode so these reads never block its
+      # writes (shared/db.py). WAL needs the directory to be writable,
+      # which is why the compose mount is not :ro.
+    editable: false

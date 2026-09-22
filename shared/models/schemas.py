@@ -33,3 +33,21 @@ class TextResult:
     text: str
     input_tokens: int
     output_tokens: int
+    # What the call cost, and how we know (ADR-0013): "reported" when
+    # the provider returned it, "computed" when priced from tokens,
+    # "unknown" when neither. None cost is recorded as unknown, never
+    # as zero. See shared.observability.cost.
+    cost: float | None = None
+    cost_source: str = "unknown"
+
+
+@dataclass(frozen=True)
+class StructuredResult[OutputT]:
+    """A parsed structured reply (`TextModelClient.generate_structured`)
+    with the same usage fields as TextResult, so logging is uniform."""
+
+    output: OutputT
+    input_tokens: int
+    output_tokens: int
+    cost: float | None = None
+    cost_source: str = "unknown"

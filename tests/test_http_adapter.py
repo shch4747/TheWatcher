@@ -69,6 +69,9 @@ async def test_channels_endpoints(client: httpx.AsyncClient):
 
 
 async def test_lint_endpoint(client: httpx.AsyncClient):
+    """A page missing its managed/append/derived skeletons is reported
+    (additively repairable). Phone/email-shaped strings are NOT reported
+    any more - ADR-0012 amends ADR-0009 for this internal wiki."""
     text = (
         "---\ntype: project\nslug: a\ntitle: A\nstatus: active\n"
         'lead: "[[X]]"\n---\n# A\n## Brief\ncontact me at a@b.com\n'
@@ -76,7 +79,8 @@ async def test_lint_endpoint(client: httpx.AsyncClient):
     async with client as c:
         resp = await c.post("/api/wiki/lint", json={"path": "a.md", "text": text})
     issues = resp.json()
-    assert any("email" in i["message"] for i in issues)
+    assert any("missing managed section" in i["message"] for i in issues)
+    assert not any("email" in i["message"] for i in issues)
 
 
 async def test_due_jobs_endpoint(client: httpx.AsyncClient):

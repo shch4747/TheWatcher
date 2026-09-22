@@ -30,13 +30,16 @@ Two real shape differences from Jev's own response worth noting:
 from __future__ import annotations
 
 import re
+import time
 from typing import Protocol
 
 from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, Score
 
+from shared.config import settings
 from shared.models.calls import generate
 from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult
 from shared.models.text import TextModelClient
+from shared.observability.interface import DECISION, ESTIMATED, scope
 
 
 class DecisionModelProtocol(Protocol):
@@ -59,6 +62,19 @@ class JevClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self._client = AsyncTypeSafeClient(api_key=api_key, base_url=base_url)
 
+    async def _log(self, started: float) -> None:
+        """Jev bills per decision and reports no token counts, so cost
+        is the configured flat estimate, marked `estimated` so a
+        dashboard never mistakes it for a measured provider cost
+        (ADR-0013). These calls previously logged nothing at all."""
+        from shared.models.calls import log_model_call
+
+        await log_model_call(
+            "decision", "jev", 0, 0,
+            cost_usd=settings.jev_cost_per_call, cost_source=ESTIMATED,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+
     async def choice(self, question: str, options: dict[str, str | None]) -> ChoiceResult:
         """`options` maps each option key to a human-readable
         description (Jev's `criteria`) - `None` is a legal value for an
@@ -66,16 +82,20 @@ class JevClient:
         of opaque keys with no description at all gives Jev nothing to
         judge relevance against, which is why this takes a dict, not a
         list."""
+        started = time.monotonic()
         response = await self._client.system_one(
             state=question, questions={"result": Choice(instructions=question, criteria=options)}
         )
+        await self._log(started)
         answer = response.choices["result"]
         return ChoiceResult(option=answer.choice, probabilities=dict(answer.probabilities))
 
     async def noul(self, question: str) -> NoulResult:
+        started = time.monotonic()
         response = await self._client.system_one(
             state=question, questions={"result": Noul(instructions=question)}
         )
+        await self._log(started)
         probability = response.nouls["result"].noul
         return NoulResult(answer=probability >= 0.5, confidence=abs(probability - 0.5) * 2)
 
@@ -86,9 +106,11 @@ class JevClient:
         # not a verified default. Replace it with real criteria the
         # moment a caller needs Score for something specific.
         criteria = ["low", "medium", "high"]
+        started = time.monotonic()
         response = await self._client.system_one(
             state=question, questions={"result": Score(instructions=question, criteria=criteria)}
         )
+        await self._log(started)
         # Confirmed live: Jev's raw score is a rung index (0..len(criteria)-1,
         # possibly interpolated), NOT normalized to 0-1 as docs.typesafe.ai's
         # own quickstart example implies - a top-rung answer on this 3-item
@@ -120,6 +142,15 @@ class WorkerBackedDecisionModel:
     def __init__(self, worker_client: TextModelClient):
         self._worker = worker_client
 
+    async def _ask(self, prompt: str) -> str:
+        """Every question goes through here inside a `decision` phase
+        scope, so Decision-tier work done by the Worker model is
+        distinguishable from real Worker work on a dashboard even though
+        both bill against the same model (ADR-0013)."""
+        with scope(phase=DECISION):
+            result = await generate(self._worker, "worker", prompt)
+        return result.text
+
     async def choice(self, question: str, options: dict[str, str | None]) -> ChoiceResult:
         option_lines = "\n".join(
             f"- {opt}: {desc}" if desc else f"- {opt}" for opt, desc in options.items()
@@ -128,22 +159,19 @@ class WorkerBackedDecisionModel:
             f"{question}\n\nOptions:\n{option_lines}\n\n"
             "Reply with only the option name exactly as written above."
         )
-        result = await generate(self._worker, "worker", prompt)
-        picked = result.text.strip()
+        picked = (await self._ask(prompt)).strip()
         if picked not in options:
             picked = next(iter(options))
         return ChoiceResult(option=picked, probabilities={picked: 1.0})
 
     async def noul(self, question: str) -> NoulResult:
         prompt = f"{question}\n\nAnswer with exactly one word: yes or no."
-        result = await generate(self._worker, "worker", prompt)
-        answer = bool(re.search(r"\byes\b", result.text, re.IGNORECASE))
+        answer = bool(re.search(r"\byes\b", await self._ask(prompt), re.IGNORECASE))
         return NoulResult(answer=answer, confidence=1.0)
 
     async def score(self, question: str) -> ScoreResult:
         prompt = f"{question}\n\nAnswer with only a number between 0 and 1."
-        result = await generate(self._worker, "worker", prompt)
-        match = re.search(r"(\d*\.?\d+)", result.text)
+        match = re.search(r"(\d*\.?\d+)", await self._ask(prompt))
         value = min(max(float(match.group(1)), 0.0), 1.0) if match else 0.5
         return ScoreResult(value=value)
 

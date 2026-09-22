@@ -1,0 +1,729 @@
+{
+  "uid": "watcher-observability",
+  "title": "Watcher \u2014 cost & ingestion",
+  "description": "Ingest latency, token/cost by phase, and wiki writes (ADR-0013).",
+  "tags": [
+    "watcher",
+    "observability"
+  ],
+  "timezone": "Asia/Kolkata",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Cost (range)",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT SUM(cost_usd) AS value FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to",
+          "rawQueryText": "SELECT SUM(cost_usd) AS value FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "description": "Sum of measured cost for every model call in the selected range. NULL cost (unpriceable model) is excluded rather than counted as zero."
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Tokens (range)",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT SUM(input_tokens + output_tokens) AS value FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to",
+          "rawQueryText": "SELECT SUM(input_tokens + output_tokens) AS value FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Messages ingested",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT SUM(messages) AS value FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to",
+          "rawQueryText": "SELECT SUM(messages) AS value FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Cost per message",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT (SELECT SUM(cost_usd) FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to) / NULLIF((SELECT SUM(messages) FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to), 0) AS value",
+          "rawQueryText": "SELECT (SELECT SUM(cost_usd) FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to) / NULLIF((SELECT SUM(messages) FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to), 0) AS value",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 5
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "description": "The number to watch when tuning prompts: total spend divided by messages actually ingested."
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Cost per thread",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT (SELECT SUM(cost_usd) FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to) / NULLIF((SELECT SUM(threads_created + threads_updated) FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to), 0) AS value",
+          "rawQueryText": "SELECT (SELECT SUM(cost_usd) FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to) / NULLIF((SELECT SUM(threads_created + threads_updated) FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to), 0) AS value",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 5
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Failed calls",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT COUNT(*) AS value FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to AND outcome = 'error'",
+          "rawQueryText": "SELECT COUNT(*) AS value FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to AND outcome = 'error'",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      },
+      "description": "Model calls that raised. These burn a provider request and used to be invisible entirely."
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Cost by phase",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN phase = 'classification' THEN cost_usd END) AS classification, SUM(CASE WHEN phase = 'summarisation' THEN cost_usd END) AS summarisation, SUM(CASE WHEN phase NOT IN ('classification','summarisation') OR phase IS NULL THEN cost_usd END) AS other FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN phase = 'classification' THEN cost_usd END) AS classification, SUM(CASE WHEN phase = 'summarisation' THEN cost_usd END) AS summarisation, SUM(CASE WHEN phase NOT IN ('classification','summarisation') OR phase IS NULL THEN cost_usd END) AS other FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4,
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "Classification = assigning messages to threads. Summarisation = rewriting a thread's title/summary/items. Series are pivoted in SQL, so no panel transformation is needed."
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Tokens by phase",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN phase = 'classification' THEN input_tokens + output_tokens END) AS classification, SUM(CASE WHEN phase = 'summarisation' THEN input_tokens + output_tokens END) AS summarisation FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN phase = 'classification' THEN input_tokens + output_tokens END) AS classification, SUM(CASE WHEN phase = 'summarisation' THEN input_tokens + output_tokens END) AS summarisation FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Ingest duration per channel",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT strftime('%s', started_at) AS time, COALESCE(channel_title, channel_jid) AS channel, duration_ms AS duration FROM obs_ingest_channel_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to AND messages > 0 ORDER BY 1",
+          "rawQueryText": "SELECT strftime('%s', started_at) AS time, COALESCE(channel_title, channel_jid) AS channel, duration_ms AS duration FROM obs_ingest_channel_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to AND messages > 0 ORDER BY 1",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "One point per channel per run. Only runs that actually had messages.",
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "channel"
+            ],
+            "keepFields": false
+          }
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Cost by channel",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT COALESCE(channel_title, channel_jid) AS channel, SUM(cost_usd) AS cost FROM obs_ingest_channel_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 HAVING cost > 0 ORDER BY cost DESC",
+          "rawQueryText": "SELECT COALESCE(channel_title, channel_jid) AS channel, SUM(cost_usd) AS cost FROM obs_ingest_channel_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 HAVING cost > 0 ORDER BY cost DESC",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Model call latency",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, AVG(duration_ms) AS avg, MAX(duration_ms) AS max FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to AND duration_ms IS NOT NULL GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, AVG(duration_ms) AS avg, MAX(duration_ms) AS max FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to AND duration_ms IS NOT NULL GROUP BY 1 ORDER BY 1",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "SQLite has no percentile function, so this is mean and max rather than p50/p95."
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Calls by outcome",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors, SUM(CASE WHEN outcome != 'error' OR outcome IS NULL THEN 1 ELSE 0 END) AS ok FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT CAST(strftime('%s', created_at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS errors, SUM(CASE WHEN outcome != 'error' OR outcome IS NULL THEN 1 ELSE 0 END) AS ok FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 13,
+      "type": "piechart",
+      "title": "Cost by source",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT COALESCE(cost_source, 'unknown') AS source, COUNT(*) AS calls FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1",
+          "rawQueryText": "SELECT COALESCE(cost_source, 'unknown') AS source, COUNT(*) AS calls FROM model_calls WHERE strftime('%s', created_at) * 1000 BETWEEN $__from AND $__to GROUP BY 1",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "reported = the provider returned the cost; computed = priced from tokens by genai-prices; estimated = a configured flat rate (Jev); unknown = no price available."
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Lapis writes by outcome",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT CAST(strftime('%s', at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN outcome = 'conflict' THEN 1 ELSE 0 END) AS conflict, SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS error FROM obs_vault_ops WHERE strftime('%s', at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "rawQueryText": "SELECT CAST(strftime('%s', at) / MAX($__interval_ms / 1000, 1) AS INT) * MAX($__interval_ms / 1000, 1) AS time, SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END) AS ok, SUM(CASE WHEN outcome = 'conflict' THEN 1 ELSE 0 END) AS conflict, SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) AS error FROM obs_vault_ops WHERE strftime('%s', at) * 1000 BETWEEN $__from AND $__to GROUP BY 1 ORDER BY 1",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 12,
+            "lineWidth": 2,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "description": "A conflict means someone (or another agent) changed the page between our read and write."
+    },
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Most-written pages",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT path, COUNT(*) AS writes, SUM(CASE WHEN outcome = 'conflict' THEN 1 ELSE 0 END) AS conflicts, MAX(content_bytes) AS bytes FROM obs_vault_ops WHERE strftime('%s', at) * 1000 BETWEEN $__from AND $__to AND operation = 'write' GROUP BY path ORDER BY writes DESC LIMIT 20",
+          "rawQueryText": "SELECT path, COUNT(*) AS writes, SUM(CASE WHEN outcome = 'conflict' THEN 1 ELSE 0 END) AS conflicts, MAX(content_bytes) AS bytes FROM obs_vault_ops WHERE strftime('%s', at) * 1000 BETWEEN $__from AND $__to AND operation = 'write' GROUP BY path ORDER BY writes DESC LIMIT 20",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 16,
+      "type": "table",
+      "title": "Recent ingest runs",
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "watcher-sqlite"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "watcher-sqlite"
+          },
+          "queryType": "table",
+          "queryText": "SELECT strftime('%s', started_at) AS time, id AS run, duration_ms AS ms, messages, threads_created AS new, threads_updated AS upd, chatter, unassigned, input_tokens + output_tokens AS tokens, cost_usd AS cost, outcome FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to AND messages > 0 ORDER BY id DESC LIMIT 50",
+          "rawQueryText": "SELECT strftime('%s', started_at) AS time, id AS run, duration_ms AS ms, messages, threads_created AS new, threads_updated AS upd, chatter, unassigned, input_tokens + output_tokens AS tokens, cost_usd AS cost, outcome FROM obs_ingest_runs WHERE strftime('%s', started_at) * 1000 BETWEEN $__from AND $__to AND messages > 0 ORDER BY id DESC LIMIT 50",
+          "timeColumns": [
+            "time"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "description": "Only runs that did work - the tick fires every 2 minutes and mostly finds nothing."
+    }
+  ]
+}

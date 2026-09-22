@@ -15,6 +15,12 @@ dependencies = [
     "pydantic-ai-slim[openai]>=0.0.14",
     "mcp>=1.0",
     "typesafe-sdk>=0.7.0",
+    # Observability (ADR-0013). genai-prices is already a pydantic-ai
+    # transitive dep; pinned explicitly because shared/observability/cost.py
+    # imports it directly and must not break on a pydantic-ai bump.
+    "genai-prices>=0.0.28",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
 ]
 
 [dependency-groups]

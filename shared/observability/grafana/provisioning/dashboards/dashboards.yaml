@@ -1,0 +1,18 @@
+# Dashboard provisioning (ADR-0013): dashboards are files in this repo,
+# reviewed like code, not clicked together in the UI and lost on the
+# next container rebuild.
+apiVersion: 1
+
+providers:
+  - name: watcher
+    orgId: 1
+    folder: Watcher
+    type: file
+    disableDeletion: false
+    # Edits made in the UI are overwritten from disk on restart, which
+    # is the point - the file is the source of truth. Export the JSON
+    # back into this folder to keep a change.
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

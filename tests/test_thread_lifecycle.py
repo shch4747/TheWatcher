@@ -13,13 +13,11 @@ from agents.wa_agent import interface as wa_agent
 from httpx import ASGITransport
 from shared.db import BotAdmin, Channel, get_session
 from shared.gateway import interface as gateway
-from shared.models.decision import FixtureDecisionModel
-from shared.models.schemas import ChoiceResult
-from shared.models.text import TextModelClient
 from shared.wiki.interface import LocalDirClient, parse_page
 
 from tests.fake_gowa.app import app as fake_gowa_app
 from tests.gowa_payloads import message_event
+from tests.scripted_models import ScriptedStructuredWorker
 
 
 def _thread_page(slug: str, state: str, last_message_at: str, extra_sections: str = "") -> str:
@@ -31,16 +29,6 @@ def _thread_page(slug: str, state: str, last_message_at: str, extra_sections: st
         "## Timeline\n<!-- watcher:append -->\n- old line [src:: x]\n<!-- /watcher -->\n"
         f"## Notes\n{extra_sections}"
     )
-
-
-class ScriptedWorker(TextModelClient):
-    def __init__(self):
-        self.model_name = "scripted"
-
-    async def generate(self, prompt: str, system: str | None = None):  # type: ignore[override]
-        from shared.models.schemas import TextResult
-
-        return TextResult(text="revived thread content", input_tokens=1, output_tokens=1)
 
 
 @pytest.fixture
@@ -112,14 +100,10 @@ async def test_stale_thread_is_revived_by_a_new_message(
         )
         await session.commit()
 
-    decision = FixtureDecisionModel(
-        choices={
-            "Which thread does this message belong to?\n\nMessage: reviving this": ChoiceResult(
-                option="stale-thread", probabilities={"stale-thread": 0.9}
-            )
-        }
+    worker = ScriptedStructuredWorker(
+        route={"rev-m0": "stale-thread"}, title="stale-thread", summary="revived thread content"
     )
-    result = await wa_agent.run_batch("revive-chan@g.us", vault, decision, ScriptedWorker())
+    result = await wa_agent.run_batch("revive-chan@g.us", vault, worker)
     assert result is not None
     assert result.threads_revived == ["stale-thread"]
 

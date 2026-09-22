@@ -20,19 +20,21 @@ predate this design and are **frozen** until v1 ships; see
 shared/            cross-cutting packages every agent depends on
   gateway/         gowa I/O: webhook intake, send, commands, identity, proposals
   wiki/            schema, parser/serialiser, Lapis client, lint, derived regen, templates
-  models/          Decision/Worker/Mentor model tiers, skills, benchmark harness
+  models/          Decision/Worker/Mentor model tiers, structured output, skills, benchmark
   scheduler/       job registry, run ledger, triggers, locks
   cms/             member lookup (ADR-0009)
+  observability/   cost/latency attribution, wiki audit, traces, Grafana (ADR-0013)
   db.py            the one SQLite schema (ADR-0005: one app, one database)
   http_adapter.py  thin JSON pass-through over the above, for out-of-process callers
 agents/
-  wa_agent/        batch cutting, thread assignment/writing, lifecycle, Chat Agent
+  wa_agent/        batch cutting, structured thread assignment/writing, lifecycle, Chat Agent
   project_agent/   Item upsert into initiative pages, Status rewrite
   innovation-agent/  FROZEN - see ADR-0010
   research-agent/    FROZEN - see ADR-0010
-skills/            SKILL.md prompt bundles for the Worker/Mentor models
+skills/            SKILL.md prompt bundles (Chat Agent + benchmark; ingestion
+                   prompts are code constants, see ADR-0012)
 tests/             pytest suite; tests/fake_gowa/ is the Seam-1 test double
-scripts/           operator scripts (add_bot_admin, worker model benchmark)
+scripts/           operator scripts (add_bot_admin, reset_threads, benchmark, backfill)
 docs/              Spec, Plan, ADRs, Wiki Format, Operations, Architecture
 main.py            composition root - wires agents into the Scheduler,
                    the Chat Agent into the Gateway, runs the app + tick loop
@@ -76,10 +78,12 @@ configured" from "configured but unreachable."
 1. `cp .env.example .env` and fill in `GOWA_BASIC_AUTH`,
    `GOWA_WEBHOOK_SECRET` (any random string), and `MODELS_API_KEY` (an
    OpenRouter key or any OpenAI-compatible provider) once you have one.
-   No Jev access? Leave `JEV_BASE_URL` empty - `main.py` falls back to
-   `WorkerBackedDecisionModel`, a real (if slower/pricier) implementation
-   that answers every Decision Model question with the Worker model
-   instead. Everything else has a sane default - see `.env.example`.
+   No Jev access? Leave `JEV_BASE_URL` empty - the Chat Agent falls back
+   to `WorkerBackedDecisionModel`, a real (if slower/pricier)
+   implementation that answers every Decision Model question with the
+   Worker model instead. Ingestion doesn't use the Decision Model at all
+   since [ADR-0012](docs/adr/0012-structured-assignment-replaces-choice.md).
+   Everything else has a sane default - see `.env.example`.
 2. `docker compose up -d --build`. This runs `main.py`, not raw
    `uvicorn` - it wires the batch cutter, Chat Agent, Project Agent and
    lifecycle jobs into the Scheduler and starts a tick loop, in addition
@@ -92,7 +96,10 @@ configured" from "configured but unreachable."
    ```
    Open the returned `qr_link` and scan with the dedicated number (QR
    expires in 30s - re-run the second command for a fresh one).
-4. `curl http://<host>:8000/healthz` should return `{"ok": true}`; check
+4. `curl http://<host>:8000/healthz` should return `{"ok": true}`. The
+   stack also brings up Grafana on `:3001` (cost + ingestion dashboard,
+   provisioned - nothing to click) and Phoenix on `:6006` (per-call LLM
+   traces). Check
    gowa/Lapis reachability separately with `check_gowa_connection()` /
    `check_vault_connection()` (see [`docs/Operations.md`](docs/Operations.md#health-checks)).
 5. Bootstrap yourself as a Bot Admin - `bot_admins` starts empty, and
@@ -103,7 +110,16 @@ configured" from "configured but unreachable."
    [`docs/Operations.md`](docs/Operations.md) for the full deploy/
    re-login/rotation/backup runbook.
 
-### Worker model benchmark (Phase 6)
+### Observability
+
+After every ingest run that did work, the bot posts a cost/latency
+report to the logs channel. The same data is in SQLite and on a
+provisioned Grafana dashboard at `:3001`; per-call traces are in Phoenix
+at `:6006`. See [ADR-0013](docs/adr/0013-observability-stack.md) for the
+design and [`docs/Operations.md`](docs/Operations.md#observability-adr-0013)
+for the runbook.
+
+## Worker model benchmark (Phase 6)
 
 ```sh
 uv run python scripts/run_worker_benchmark.py

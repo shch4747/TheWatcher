@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from shared.db import Job, Run, aware_utc, get_session
+from shared.observability.interface import scope
 from shared.scheduler.triggers import RunAfter, RunAt, RunEvery, RunNow, Trigger, is_due
 
 __all__ = [
@@ -148,7 +149,10 @@ async def _run_with_retries(spec: JobSpec) -> RunResult:
             await session.refresh(run_row)
 
         try:
-            await spec.handler()
+            # Everything the handler does - model calls, vault writes -
+            # is attributed to this job (ADR-0013).
+            with scope(job_name=spec.name):
+                await spec.handler()
         except Exception as exc:  # noqa: BLE001 - recorded, not swallowed silently
             last_error = f"{type(exc).__name__}: {exc}"
             logger.warning("job %s attempt %d failed: %s", spec.name, attempt, last_error)

@@ -1,10 +1,14 @@
 """Lint job (Wiki Format principle 12: reports, does not repair - except
 purely additive defaults). Validates a page's frontmatter (via the
 schema, which already rejects bad values at parse time - lint's job is
-to catch and report that instead of letting the pipeline crash), scans
-for PII (ADR-0009: phone/email-shaped strings are never allowed in the
-wiki), and flags missing managed/append/derived section skeletons as
-additively repairable.
+to catch and report that instead of letting the pipeline crash) and
+flags missing managed/append/derived section skeletons as additively
+repairable.
+
+PII scanning (`contains_pii`, `redact_pii`, `_pii_issues`) is kept but
+no longer applied by lint or by ingestion: the wiki is internal to the
+club, senders are rendered by name, and a phone-shaped string in a
+message is data the members want kept (ADR-0012 amends ADR-0009).
 """
 from __future__ import annotations
 
@@ -32,11 +36,9 @@ def _looks_like_phone(candidate: str) -> bool:
 
 
 def redact_pii(text: str) -> str:
-    """Replace phone/email-shaped substrings with `[redacted]` - for a
-    generator that wants to keep the rest of a sentence rather than
-    discard it outright over one incidental PII-shaped substring (see
-    `contains_pii` for the boolean form, used where discarding the
-    whole value is the right call, e.g. a title)."""
+    """Replace phone/email-shaped substrings with `[redacted]`. Not used
+    by ingestion any more (see module docstring); kept for any caller
+    that wants an opt-in scrub."""
     text = _EMAIL_RE.sub("[redacted]", text)
     return _PHONE_CANDIDATE_RE.sub(
         lambda m: "[redacted]" if _looks_like_phone(m.group(0)) else m.group(0), text
@@ -45,12 +47,9 @@ def redact_pii(text: str) -> str:
 
 def contains_pii(text: str) -> bool:
     """True if `text` contains a phone-number-shaped or email/JID-shaped
-    substring (ADR-0009: phone/email-shaped strings are never allowed in
-    the wiki - a WhatsApp jid like "919244352208@s.whatsapp.net" matches
-    both). `_pii_issues` uses the same two regexes for the full lint
-    scan; this is the plain-bool form for a generator to guard its own
-    output before ever writing it - a title minted from raw message
-    text can otherwise echo a sender's jid straight into the wiki."""
+    substring (a WhatsApp jid like "919244352208@s.whatsapp.net" matches
+    both). The boolean form of `redact_pii`; likewise no longer applied
+    by ingestion or lint."""
     if _EMAIL_RE.search(text):
         return True
     return any(_looks_like_phone(m.group(0)) for m in _PHONE_CANDIDATE_RE.finditer(text))
@@ -64,6 +63,8 @@ class LintIssue:
 
 
 def _pii_issues(path: str, page: Page) -> list[LintIssue]:
+    """Not called by `lint_text` (see module docstring); available for
+    an opt-in scan."""
     issues = []
     for section in page.sections:
         for m in _PHONE_CANDIDATE_RE.finditer(section.body):
@@ -123,7 +124,7 @@ def lint_text(path: str, text: str) -> list[LintIssue]:
     issues = []
     if validation_error is not None:
         issues.append(LintIssue(path=path, severity="error", message=str(validation_error)))
-    issues += _pii_issues(path, page) + _missing_section_issues(path, page)
+    issues += _missing_section_issues(path, page)
     return issues
 
 

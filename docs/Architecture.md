@@ -9,7 +9,8 @@ tags:
 # Architecture — Watcher v1
 
 One Python application (ADR-0005), one container, deployed with gowa
-via Docker Compose. Packages under `shared/` are cross-cutting; the two
+via Docker Compose (plus Grafana and Phoenix for observability,
+ADR-0013). Packages under `shared/` are cross-cutting; the two
 in-scope agents (`agents/wa_agent`, `agents/project_agent`) build on top
 of them. See [[Spec - Watcher v1]] for the design behind each box and
 `AGENTS.md` for the import rules the diagram below encodes.
@@ -24,12 +25,13 @@ flowchart TB
         GW["shared/gateway<br/>webhook intake, send, commands,<br/>identity, proposals, reactions"]
         DB[("SQLite<br/>messages_buffer, channels, proposals,<br/>members_registry, jobs/runs, model_calls")]
         SCHED["shared/scheduler<br/>job registry, run ledger,<br/>per-key locks, retries"]
-        WAAGENT["agents/wa_agent<br/>batch cutter, thread assignment,<br/>lifecycle, Chat Agent"]
+        WAAGENT["agents/wa_agent<br/>batch cutter, structured thread<br/>assignment, lifecycle, Chat Agent"]
         PAAGENT["agents/project_agent<br/>Item upsert, Status rewrite"]
-        MODELS["shared/models<br/>Decision (Jev) / Worker / Mentor,<br/>skills, benchmark"]
+        MODELS["shared/models<br/>Decision (Jev) / Worker / Mentor,<br/>structured output, skills, benchmark"]
         WIKI["shared/wiki<br/>schema, parser, lint,<br/>derived regen, templates"]
         CMS["shared/cms<br/>member lookup"]
         HTTP["shared/http_adapter<br/>/api/* JSON pass-through"]
+        OBS["shared/observability<br/>cost/latency attribution,<br/>wiki audit, OTel traces"]
 
         GW --> DB
         GW -->|is_admin_command| WAAGENT
@@ -45,14 +47,28 @@ flowchart TB
         HTTP --> GW
         HTTP --> WIKI
         HTTP --> SCHED
+        WAAGENT -.->|phase/channel scope| OBS
+        SCHED -.->|job scope| OBS
+        MODELS -.->|tokens, cost, latency| OBS
+        WIKI -.->|every write/delete| OBS
+        OBS --> DB
     end
 
     GW -->|send, react| WA
     WIKI <-->|read-modify-write,<br/>base revision| LAPIS[("Lapis vault<br/>(the wiki)")]
-    MODELS -->|Choice/Noul/Score| JEV["Jev<br/>(Decision Model)"]
-    MODELS -->|generate| OR["OpenRouter or any<br/>OpenAI-compatible endpoint<br/>(Worker/Mentor)"]
+    MODELS -->|Choice/Noul/Score<br/>(Chat Agent only, ADR-0012)| JEV["Jev<br/>(Decision Model)"]
+    MODELS -->|generate,<br/>generate_structured| OR["OpenRouter or any<br/>OpenAI-compatible endpoint<br/>(Worker/Mentor)"]
     CMS -->|get_member| ARIESCMS["ARIES CMS<br/>(protected read endpoints)"]
+    OBS -->|OTLP spans| PHOENIX["Phoenix<br/>(LLM traces, SQLite)"]
+    DB -->|SELECT via<br/>sqlite datasource| GRAFANA["Grafana<br/>(cost + ingestion dashboard)"]
 ```
+
+Observability is a leaf: `shared/observability` depends on `shared.db`,
+`shared.config` and `shared.wiki` (the client protocol it wraps) and on
+nothing above them. In particular it never imports `shared.gateway` -
+the scheduler imports observability and the gateway imports the
+scheduler, so that would close a cycle. The ingest report is *rendered*
+there and *sent* by `main.py` (ADR-0013).
 
 ## Module boundaries (enforced by convention, not tooling)
 

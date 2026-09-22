@@ -25,11 +25,50 @@ services:
       GOWA_BASE_URL: http://gowa:3000
       DATABASE_URL: sqlite+aiosqlite:////data/watcher.db
       VAULT_ROOT: /data/vault
+      OTEL_ENDPOINT: http://phoenix:6006/v1/traces
     volumes:
       - watcher-data:/data
     depends_on:
       - gowa
 
+  # --- observability (ADR-0013) ---------------------------------------
+  # Grafana reads the app's SQLite file directly through the
+  # frser-sqlite-datasource plugin - no exporter, no second datastore.
+  # The mount is read-WRITE on purpose: the app runs the DB in WAL mode
+  # (see shared/db.py) and SQLite needs to create -wal/-shm sidecars,
+  # which fails on a read-only directory. Grafana only ever SELECTs.
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    # 3000 is gowa's; Grafana's own default port stays 3000 inside.
+    ports:
+      - "3001:3000"
+    environment:
+      GF_INSTALL_PLUGINS: frser-sqlite-datasource
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+    volumes:
+      - watcher-data:/data
+      - ./shared/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - watcher
+
+  # LLM trace UI. One container, SQLite-backed, speaks OTLP - the app
+  # exports pydantic-ai's GenAI spans here (shared/observability/otel.py).
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    restart: unless-stopped
+    ports:
+      - "6006:6006"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+    volumes:
+      - phoenix-data:/mnt/data
+
 volumes:
   gowa-storage:
   watcher-data:
+  grafana-data:
+  phoenix-data:

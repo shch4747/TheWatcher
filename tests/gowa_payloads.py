@@ -14,12 +14,18 @@ def message_event(
     sender: str | None = None,
     replied_to_id: str | None = None,
     event: str = "message",
+    sender_name: str | None = None,
+    timestamp: str | None = None,
 ) -> dict:
     body: dict = {"id": message_id, "chat_id": chat_id, "body": text}
     if sender:
         body["from"] = sender
     if replied_to_id:
         body["replied_to_id"] = replied_to_id
+    if sender_name:
+        body["sender_display_name"] = sender_name
+    if timestamp:
+        body["timestamp"] = timestamp
     return {"event": event, "payload": body}
 
 

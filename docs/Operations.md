@@ -46,6 +46,13 @@ the code. See [[Spec - Watcher v1]] for what the system does and
 6. Message an allowlisted or new group with `/setup other` to confirm
    the webhook path end to end, then `/setup project <Title>` for a
    real project.
+7. Optional but recommended: `/setup logs <Title>` on a group you want
+   the bot's own output in - job failures, ingest warnings, and the
+   per-run cost report all go there. That channel is never itself
+   ingested into threads (ADR-0013).
+8. Observability comes up with the stack: Grafana on
+   `http://<host>:3001`, Phoenix (traces) on `http://<host>:6006`. See
+   "Observability" below.
 
 Nothing here needs a rebuild for config-only changes - `.env` is read at
 process start, so `docker compose up -d` after editing it is enough.
@@ -143,14 +150,23 @@ copy to also scrub.
 
 ## PII in the wiki
 
-`shared/wiki/lint.py`'s `lint_text()` flags phone- and email-shaped
-strings in any page section (ADR-0009) - this is exercised by
-`tests/test_lint_and_derive.py` in CI on every push, so a regression
-that stops catching PII fails CI, not just a manual run. Running lint
-against the *live* vault (not just fixtures) is the derived-regeneration
-job's responsibility once wired to the Scheduler (Phase 3's job wiring,
-Plan Phase 1) - `meta/lint.md` is where a human should look for the
-current state of the real vault.
+**Since ADR-0012, PII is deliberately *not* stripped.** The wiki is
+internal to the club, so a phone number a member actually typed stays in
+the summary, and sender jids go into the ingestion prompts (they
+disambiguate two people with the same display name). What pages render
+is *people by name*: `[[Member]]` when the sender is linked in the
+members registry, their WhatsApp display name otherwise, and the raw jid
+only when gowa gave no name at all.
+
+`lint_text()` no longer reports phone/email-shaped strings.
+`shared/wiki/lint.py` still defines `contains_pii()` and `redact_pii()`
+for any caller that wants an opt-in scrub - nothing calls them today.
+
+Traces carry more: with `OTEL_INCLUDE_CONTENT=true` (the default) the
+spans exported to Phoenix include prompts and message text. Phoenix is
+self-hosted alongside the app, so that content does not leave the
+deployment, but set `OTEL_INCLUDE_CONTENT=false` if you want spans
+without message bodies.
 
 ## Restore from backup
 
@@ -206,7 +222,7 @@ so a health-check loop can call them unconditionally.
 ## Recurring jobs
 
 `main.py` (what the Dockerfile actually runs, not raw `uvicorn`) wires
-four Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
+five Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
 min), `project_agent_tick` (Inbox consumption, every 2 min),
 `lifecycle_tick` (stale/ended handling, daily), `sunday_nudge_tick`
 (daily, only acts on Sundays). It also registers the Chat Agent as a
@@ -214,6 +230,57 @@ real-time message hook, so mentions/replies get answered immediately
 rather than waiting for the next batch. Check `GET /api/scheduler/due-jobs`
 to see what's pending; `shared.scheduler.interface.ledger_tail(name)`
 for a job's recent run history (success/failure, errors).
+
+## Observability (ADR-0013)
+
+Three things to look at, in increasing order of detail.
+
+**The logs channel.** After every ingest run that processed at least one
+message, the bot posts a report: total time and cost, a line per channel
+with its duration and thread counts, and the token/cost split between
+classification (assigning messages to threads) and summarisation
+(rewriting a thread's title/summary/items). Runs that found nothing
+stay silent - the tick fires every 2 minutes, so reporting
+unconditionally would post ~720 messages/day. `OBS_REPORT_MIN_MESSAGES`
+is the threshold.
+
+**Grafana** on `http://<host>:3001` (3000 is gowa's). The datasource and
+the "Watcher - cost & ingestion" dashboard are provisioned from
+`shared/observability/grafana/provisioning/`, so there is nothing to
+click: bring the stack up and the dashboard has data. The panels that
+matter for tuning are **cost per message** and **cost per thread** -
+change a prompt, watch those two.
+
+Grafana reads `watcher.db` directly via the `frser-sqlite-datasource`
+plugin. The data volume is mounted read-**write** on purpose: the app
+keeps the database in WAL mode (so Grafana's reads never block the
+app's writes) and SQLite must be able to create `-wal`/`-shm` sidecars,
+which fails on a read-only mount. Grafana only ever issues SELECTs.
+
+**Phoenix** on `http://<host>:6006` - per-call traces with prompts,
+replies, token counts and latency, nested under each agent run. The app
+exports OpenTelemetry GenAI spans there (`OTEL_ENDPOINT`). If Phoenix is
+down the app logs a warning and carries on; tracing is never a hard
+dependency. Point `OTEL_ENDPOINT` at any other OTLP/HTTP collector to
+switch backends, or set `OTEL_ENABLED=false` to turn it off.
+
+The tables behind all this, in the same SQLite file as everything else:
+`obs_ingest_runs`, `obs_ingest_channel_runs` (per-channel duration and
+per-phase tokens/cost), `obs_vault_ops` (every wiki write/delete, with
+conflicts), and `model_calls` (per call: phase, channel, tokens, cost,
+`cost_source`, latency, outcome).
+
+`cost_source` says how much to trust a cost: `reported` (the provider
+returned it - OpenRouter always does), `computed` (priced from tokens by
+genai-prices), `estimated` (a configured flat rate, currently only Jev,
+which bills per decision and reports no tokens), or `unknown` (no price
+available - stored as NULL, never as zero).
+
+On a database that predates ADR-0013, run
+`uv run python scripts/backfill_observability.py` (dry run; `--yes` to
+apply) to mark old unattributable rows `phase='legacy'` - including the
+~550 bogus zero-token `decision/jev` rows the old
+`decide_with_fallback` wrote on every call.
 
 ## HTTP adapter
 

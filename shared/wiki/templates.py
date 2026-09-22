@@ -110,10 +110,21 @@ def render_new_thread_page(
     timeline_lines: list[str],
     participants: list[str],
     message_ids: list[str],
+    opened_at: datetime | None = None,
+    last_message_at: datetime | None = None,
 ) -> str:
-    now = datetime.now(UTC).isoformat()
+    """`opened_at`/`last_message_at` are when the thread's first and last
+    message were *sent*, not when we wrote the page - a backfilled
+    conversation from last month must not look like it happened today
+    (it drives the stale check and the channel index's "last <date>").
+    They default to now for a caller that has no message times."""
+    fallback = datetime.now(UTC)
+    opened = (opened_at or fallback).isoformat()
+    last = (last_message_at or opened_at or fallback).isoformat()
     initiative_line = f'initiative: "[[{initiative}]]"\n' if initiative else ""
-    participants_list = ", ".join(f'"[[{p}]]"' for p in participants)
+    # Entries arrive ready to write - "[[Member]]" for a linked sender,
+    # a bare display name otherwise - so quote, don't wrap.
+    participants_list = ", ".join(yaml_str(p) for p in participants)
     message_ids_list = ", ".join(f'"{m}"' for m in message_ids)
     timeline_body = "\n".join(timeline_lines)
     return (
@@ -124,8 +135,8 @@ def render_new_thread_page(
         f"{initiative_line}"
         f"title: {yaml_str(title)}\n"
         "state: active\n"
-        f"opened_at: {now}\n"
-        f"last_message_at: {now}\n"
+        f"opened_at: {opened}\n"
+        f"last_message_at: {last}\n"
         f"participants: [{participants_list}]\n"
         f"message_ids: [{message_ids_list}]\n"
         f"summary_cursor: {message_ids[-1] if message_ids else ''}\n"

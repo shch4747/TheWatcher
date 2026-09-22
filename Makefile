@@ -1,4 +1,4 @@
-.PHONY: dev test lint typecheck check check-gowa check-lapis add-admin reset-threads benchmark
+.PHONY: dev test lint typecheck check check-gowa check-lapis add-admin reset-threads benchmark backfill-obs
 
 dev: ## Run the app locally (main.py: FastAPI + scheduler tick loop)
 	uv run python main.py
@@ -31,3 +31,6 @@ reset-threads: ## Delete all thread pages + reset cursors for every watched chan
 
 benchmark: ## Worker model benchmark (needs MODELS_API_KEY - real, billed calls)
 	uv run python scripts/run_worker_benchmark.py
+
+backfill-obs: ## Mark pre-ADR-0013 model_calls rows phase='legacy' (dry run; add --yes via ARGS)
+	uv run python scripts/backfill_observability.py $(ARGS)

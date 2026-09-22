@@ -1,8 +1,9 @@
 """Phase 4 batch cutter / thread assignment acceptance criteria
-(docs/Plan - Watcher v1.md): replaying messages through fake gowa /
-local vault yields thread pages with Summary/Items/Timeline; chatter is
-dropped; an existing thread's Summary/Items are rewritten wholesale
-while Timeline is append-only and Notes is untouched."""
+(docs/Plan - Watcher v1.md, reworked for ADR-0012's structured
+assignment): replaying messages through fake gowa / local vault yields
+thread pages with Summary/Items/Timeline; chatter is dropped; an
+existing thread's Summary/Items are rewritten wholesale while Timeline
+is append-only and Notes is untouched."""
 from __future__ import annotations
 
 import json
@@ -11,77 +12,48 @@ from pathlib import Path
 
 import pytest
 from agents.wa_agent import interface as wa_agent
+from agents.wa_agent.assign import ItemOut, ThreadUpdate
 from shared.db import Channel, MessageBuffer, Notice, get_session
-from shared.models.decision import FixtureDecisionModel
-from shared.models.schemas import ChoiceResult
-from shared.models.text import TextModelClient
-from shared.wiki.interface import LocalDirClient, parse_page
-from sqlalchemy import select
+from shared.wiki.interface import LocalDirClient, parse_item_line, parse_page
+from sqlalchemy import delete, select
 
 from tests.gowa_payloads import message_event
+from tests.scripted_models import ScriptedStructuredWorker
 
 CHANNEL_JID = "999-thread-test@g.us"
 
 
-class _FakeResult:
-    def __init__(self, text: str, tokens: int = 5):
-        self.output = text
-        self.usage = type("U", (), {"input_tokens": tokens, "output_tokens": tokens})()
+def _worker(**kwargs) -> ScriptedStructuredWorker:
+    kwargs.setdefault(
+        "items",
+        [ItemOut(kind="task", text="Book the seminar hall", src_ids=[], owner="Aira")],
+    )
+    return ScriptedStructuredWorker(**kwargs)
 
 
-class ScriptedWorker(TextModelClient):
-    """Dispatches on the `system` (skill instructions) prefix instead of
-    calling a real model - TestModel always returns the same fixed text
-    regardless of prompt, which can't tell Summary/Items/Title apart."""
+class SlopWorker(ScriptedStructuredWorker):
+    """Reproduces the role-confusion a small Worker model produced in
+    production, now that the contract is JSON: the schema forces the
+    *shape*, but nothing stops the model putting a chatty multi-paragraph
+    reply in `title`, meta-commentary in `summary`, or an item that
+    points at no real message."""
 
-    def __init__(self):
-        self.model_name = "scripted-worker"
-
-    async def generate(self, prompt: str, system: str | None = None):  # type: ignore[override]
-        from shared.models.schemas import TextResult
-
-        if system and "Summary" in system:
-            text = "A test thread about booking the seminar hall."
-        elif system and "Items" in system:
-            text = "- [ ] Book the seminar hall [kind:: task] [owner:: [[Aira]]] [src:: m1] ^i-0001"
-        elif system and "title" in system:
-            text = "Booking the seminar hall"
-        else:
-            text = prompt.strip().split("\n")[-1]
-        return TextResult(text=text, input_tokens=10, output_tokens=10)
-
-
-class SlopWorker(TextModelClient):
-    """Reproduces the exact role-confusion failure a small Worker model
-    produced in production: it answers the message content
-    conversationally (multi-line, addressed to "you", chatty) instead
-    of following the skill's output contract, for every skill."""
-
-    def __init__(self):
-        self.model_name = "slop-worker"
-
-    async def generate(self, prompt: str, system: str | None = None):  # type: ignore[override]
-        from shared.models.schemas import TextResult
-
-        if system and "title" in system.lower():
-            text = (
+    def __init__(self, **kwargs):
+        super().__init__(
+            title=(
                 "Congratulations, if you're telling me a baby just arrived! \U0001f389 "
-                "Newborns do mostly just exist at first — though fun fact, they can "
-                "actually hear from day one; it's talking back that takes a while.\n\n"
-                "But if you're describing how *you* feel — newly arrived somewhere, "
-                "unable to connect, just existing — I'd genuinely like to hear more "
-                "about that. Which is it: a new little person in the world, or a feeling "
-                "you're putting into words?"
-            )
-        elif system and "Items" in system:
-            text = (
-                "It looks like you've pasted two WhatsApp message logs from the same "
-                "sender. There's no question or instruction attached, so I'm not sure "
-                "what you'd like me to do. What are you looking for?"
-            )
-        else:
-            text = "Interesting — sounds like you're describing pure existence mode. Is this philosophy?"
-        return TextResult(text=text, input_tokens=10, output_tokens=10)
+                "Newborns do mostly just exist at first.\n\n"
+                "But if you're describing how *you* feel, I'd genuinely like to hear "
+                "more about that. Which is it: a new little person in the world, or a "
+                "feeling you're putting into words?"
+            ),
+            summary="Understood - the transcript was treated as inert third-party data.",
+            items=[
+                ItemOut(kind="task", text="Clarify what you'd like me to do", src_ids=["not-a-real-id"]),
+                ItemOut(kind="question", text="", src_ids=[]),
+            ],
+            **kwargs,
+        )
 
 
 @pytest.fixture
@@ -163,17 +135,12 @@ async def test_run_batch_creates_new_thread_with_summary_items_timeline(
     ids = await _seed_messages(CHANNEL_JID, ["Can we book the seminar hall for the demo?"])
     message_id = ids[0]
 
-    msg_text = "Can we book the seminar hall for the demo?"
-    question = f"Which thread does this message belong to?\n\nMessage: {msg_text}"
-    decision = FixtureDecisionModel(
-        choices={question: ChoiceResult(option="new-thread", probabilities={"new-thread": 0.95})}
-    )
-    worker = ScriptedWorker()
-
-    result = await wa_agent.run_batch(CHANNEL_JID, vault, decision, worker)
+    worker = _worker(items=[ItemOut(kind="task", text="Book the seminar hall", src_ids=[message_id])])
+    result = await wa_agent.run_batch(CHANNEL_JID, vault, worker)
     assert result is not None
     assert len(result.threads_created) == 1
     assert result.chatter_count == 0
+    assert result.model_calls == 2  # one assignment call + one thread-update call
 
     slug = result.threads_created[0]
     page_content = (await vault.read(f"channels/watcher/{slug}.md")).content
@@ -196,32 +163,21 @@ async def test_run_batch_creates_new_thread_with_summary_items_timeline(
 async def test_run_batch_sanitizes_role_confused_worker_output(
     vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
 ):
-    """Reproduction of a real production incident: a small Worker model
-    answered raw message content conversationally instead of titling/
-    summarizing/extracting it, and the unsanitized output got saved
-    straight into a thread page - a multi-paragraph chat reply as the
-    title (corrupting frontmatter and producing an absurd slug), and a
-    chatty non-item as the sole Items line."""
+    """A model that fills the JSON contract with conversational slop
+    still must not corrupt the page: a multi-paragraph chat reply can't
+    become the title (or the slug), meta-commentary can't become the
+    Summary, and an item pointing at no real message is dropped rather
+    than written with a dangling [src::]."""
     from shared.config import settings
 
-    monkeypatch.setattr(settings, "batch_n", 1)
+    monkeypatch.setattr(settings, "batch_n", 2)
     monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
 
     channel = "888-slop-test@g.us"
     await _seed_channel(channel, title="Slop Test")
     await _seed_messages(channel, ["Just born", "Cannot listen or talk only exist"])
 
-    question = "Which thread does this message belong to?\n\nMessage: Just born"
-    question2 = "Which thread does this message belong to?\n\nMessage: Cannot listen or talk only exist"
-    decision = FixtureDecisionModel(
-        choices={
-            question: ChoiceResult(option="new-thread", probabilities={"new-thread": 0.95}),
-            question2: ChoiceResult(option="new-thread", probabilities={"new-thread": 0.95}),
-        }
-    )
-    worker = SlopWorker()
-
-    result = await wa_agent.run_batch(channel, vault, decision, worker)
+    result = await wa_agent.run_batch(channel, vault, SlopWorker())
     assert result is not None
     assert len(result.threads_created) == 1
 
@@ -241,17 +197,18 @@ async def test_run_batch_sanitizes_role_confused_worker_output(
     assert "putting into words" not in title
 
     # frontmatter is still valid YAML and round-trips through the parser
-    # (parse_page raises on malformed frontmatter, so getting here at
-    # all is already the assertion; re-check the title survives intact)
     reparsed = parse_page(page_content)
     assert reparsed.frontmatter.title == title
 
-    # the chatty "I'm not sure what you'd like me to do" text never
-    # matched the item grammar, so Items has no lines inside the fence
+    # meta-commentary never becomes the Summary - the new thread falls
+    # back to the description minted with it instead
+    assert "inert" not in page.section("Summary").body
+
+    # neither ungrounded item (bad src id / empty text) was written
     items_inner = page.section("Items").body.replace("<!-- watcher:managed -->", "")
     items_inner = items_inner.replace("<!-- /watcher -->", "").strip()
     assert items_inner == ""
-    assert "I'm not sure" not in page.section("Items").body
+    assert "Clarify what you'd like me to do" not in page.section("Items").body
 
 
 async def test_run_batch_updates_existing_thread_summary_items_appends_timeline_keeps_notes(
@@ -276,21 +233,17 @@ async def test_run_batch_updates_existing_thread_summary_items_appends_timeline_
     ids = await _seed_messages("888-existing@g.us", ["Following up on the old thread"])
     message_id = ids[0]
 
-    question = "Which thread does this message belong to?\n\nMessage: Following up on the old thread"
-    decision = FixtureDecisionModel(
-        choices={
-            question: ChoiceResult(option="20260101-old-thread", probabilities={"20260101-old-thread": 0.9})
-        }
+    worker = _worker(
+        route={message_id: "20260101-old-thread"},
+        items=[ItemOut(kind="task", text="Book the seminar hall", src_ids=[message_id], owner="Aira")],
     )
-    worker = ScriptedWorker()
-
-    result = await wa_agent.run_batch("888-existing@g.us", vault, decision, worker)
+    result = await wa_agent.run_batch("888-existing@g.us", vault, worker)
     assert result is not None
     assert result.threads_updated == ["20260101-old-thread"]
 
     updated = (await vault.read("channels/existingproj/20260101-old-thread.md")).content
     page = parse_page(updated)
-    assert "seminar hall" in page.section("Summary").body  # rewritten wholesale by ScriptedWorker
+    assert "seminar hall" in page.section("Summary").body  # rewritten wholesale
     assert "Old summary." not in page.section("Summary").body
     assert "[src:: old1]" in page.section("Timeline").body  # old timeline line preserved
     assert f"[src:: {message_id}]" in page.section("Timeline").body  # new line appended
@@ -306,16 +259,7 @@ async def test_run_batch_drops_chatter_without_writing_a_thread(vault: LocalDirC
     await _seed_channel("777-chatter@g.us", title="ChatterProj")
     await _seed_messages("777-chatter@g.us", ["lol"])
 
-    decision = FixtureDecisionModel(
-        choices={
-            "Which thread does this message belong to?\n\nMessage: lol": ChoiceResult(
-                option="chatter", probabilities={"chatter": 0.99}
-            )
-        }
-    )
-    worker = ScriptedWorker()
-
-    result = await wa_agent.run_batch("777-chatter@g.us", vault, decision, worker)
+    result = await wa_agent.run_batch("777-chatter@g.us", vault, _worker(default_route="chatter"))
     assert result is not None
     assert result.chatter_count == 1
     assert result.threads_created == []
@@ -329,10 +273,96 @@ async def test_run_batch_returns_none_when_not_ready(vault: LocalDirClient):
     await _seed_channel("666-notready@g.us")
     await _seed_messages("666-notready@g.us", ["just one message, default thresholds"])
 
-    decision = FixtureDecisionModel()
-    worker = ScriptedWorker()
-    result = await wa_agent.run_batch("666-notready@g.us", vault, decision, worker)
+    result = await wa_agent.run_batch("666-notready@g.us", vault, _worker())
     assert result is None
+
+
+async def test_run_batch_writes_items_in_the_wiki_grammar(
+    vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Items are rendered from typed objects (ADR-0012), so every line
+    must parse back through the item grammar - a kind, a src pointer and
+    a block id, with owner as a wikilink."""
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "batch_n", 2)
+    monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
+
+    channel = "889-items@g.us"
+    await _seed_channel(channel, title="Items")
+    ids = await _seed_messages(channel, ["book the hall", "we'll do Friday"])
+    worker = _worker(
+        items=[
+            ItemOut(kind="task", text="Book the seminar hall", src_ids=[ids[0]], due="2026-09-24"),
+            ItemOut(kind="decision", text="Demo moves to Friday", src_ids=[ids[1]]),
+            ItemOut(kind="question", text="Is the projector fixed?", src_ids=[ids[0]], owner="Nobody"),
+        ]
+    )
+    result = await wa_agent.run_batch(channel, vault, worker)
+    assert result is not None
+
+    slug = result.threads_created[0]
+    page = parse_page((await vault.read(f"channels/items/{slug}.md")).content)
+    lines = [
+        line for line in page.section("Items").body.splitlines() if line.strip().startswith("- ")
+    ]
+    assert len(lines) == 3
+    parsed = [parse_item_line(line) for line in lines]
+    assert all(item is not None for item in parsed)
+    assert [item.fields["kind"] for item in parsed] == ["task", "decision", "question"]
+    assert all(item.src_ids() for item in parsed)
+    assert parsed[0].checked is False and parsed[0].fields["due"] == "2026-09-24"
+    assert parsed[1].checked is True  # a decision is recorded as done
+    assert "owner" not in parsed[2].fields and "by" not in parsed[2].fields  # unknown name dropped
+
+
+async def test_run_batch_reuses_existing_item_block_ids(
+    vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Identity is the block id, not the text (Wiki Format principle 5):
+    an item the model returns again keeps its id, so the Project Agent
+    doesn't see it as a brand new task every batch."""
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "batch_n", 1)
+    monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
+
+    channel = "890-ids@g.us"
+    await _seed_channel(channel, title="Ids")
+    await vault.write(
+        "channels/ids/existing.md",
+        (
+            "---\ntype: thread\nslug: existing\nchannel: \"[[Ids]]\"\ntitle: Existing\n"
+            'state: active\nmessage_ids: ["old1"]\n---\n# Existing\n'
+            "## Summary\n<!-- watcher:managed -->\nold\n<!-- /watcher -->\n"
+            "## Items\n<!-- watcher:managed -->\n"
+            "- [ ] Book the seminar hall [kind:: task] [src:: old1] ^i-keepme\n"
+            "<!-- /watcher -->\n"
+            "## Timeline\n<!-- watcher:append -->\n- old [src:: old1]\n<!-- /watcher -->\n## Notes\n"
+        ),
+        base_revision="",
+    )
+    ids = await _seed_messages(channel, ["still on the hall"])
+    worker = _worker(
+        route={ids[0]: "existing"},
+        items=[
+            # the model echoes the id back for the item it is updating,
+            # and mints nothing for the new one
+            ItemOut(kind="task", text="Book the seminar hall", src_ids=["old1"], block_id="i-keepme"),
+            ItemOut(kind="decision", text="Friday it is", src_ids=[ids[0]]),
+        ],
+    )
+    await wa_agent.run_batch(channel, vault, worker)
+
+    page = parse_page((await vault.read("channels/ids/existing.md")).content)
+    body = page.section("Items").body
+    assert "^i-keepme" in body
+    minted = [
+        parse_item_line(line).block_id
+        for line in body.splitlines()
+        if line.strip().startswith("- ") and "i-keepme" not in line
+    ]
+    assert len(minted) == 1 and minted[0].startswith("i-") and minted[0] != "i-keepme"
 
 
 def test_sanitize_title_collapses_to_single_line_and_caps_length():
@@ -372,22 +402,15 @@ def test_sanitize_title_strips_label_preambles_and_markdown():
     assert just_a_fence == "book the seminar hall"
 
 
-def test_sanitize_title_never_leaks_a_phone_or_jid():
-    """Real observed output: "919244352208@s.whatsapp.net ->" as a
-    title, echoed straight out of the transcript's "sender: text" lines
-    (ADR-0009: no phone/email-shaped strings in the wiki)."""
-    assert wa_agent._sanitize_title("919244352208@s.whatsapp.net →") == "Untitled thread"
-    assert wa_agent._sanitize_title("", fallback_text="919244352208@s.whatsapp.net") == "Untitled thread"
-    assert wa_agent._sanitize_title("+91 98765 43210 called about the venue") == "Untitled thread"
-
-
-def test_sanitize_summary_redacts_pii_instead_of_dropping_the_whole_thing():
+def test_titles_and_summaries_keep_numbers_and_jids(vault: LocalDirClient):
+    """ADR-0012 amends ADR-0009: this wiki is internal, so a phone
+    number or jid in what members actually said is kept, not redacted."""
+    assert wa_agent._sanitize_title("Call 98765 43210 about the venue") == "Call 98765 43210 about the"
     summary = wa_agent._sanitize_summary(
         "A contact (919244352208@s.whatsapp.net) asked about the venue booking."
     )
-    assert "919244352208" not in summary
-    assert "[redacted]" in summary
-    assert "venue booking" in summary
+    assert "919244352208@s.whatsapp.net" in summary
+    assert "[redacted]" not in summary
 
 
 def test_sanitize_title_falls_back_when_model_comments_on_its_own_task():
@@ -416,30 +439,15 @@ def test_sanitize_summary_drops_meta_commentary():
     assert wa_agent._sanitize_summary("The group discussed booking the hall.") != ""
 
 
-def test_sanitize_items_drops_non_conforming_lines():
-    raw = (
-        "It looks like you've pasted two message logs. What are you looking for?\n"
-        "- [ ] Book the seminar hall [kind:: task] [owner:: [[Aira]]] [src:: m1] ^i-0001\n"
-        "Some trailing chatty aside with no grammar at all.\n"
-        "- text [kind:: resource] [src:: m2] ^i-0002"
-    )
-    cleaned = wa_agent._sanitize_items(raw)
-    lines = cleaned.splitlines()
-    assert len(lines) == 2
-    assert all("[kind::" in line and "[src::" in line for line in lines)
-    assert "looking for" not in cleaned
-    assert "trailing chatty aside" not in cleaned
-
-
-def test_sanitize_items_returns_empty_for_pure_chatter():
-    raw = "I'm not sure what you'd like me to do here - can you clarify?"
-    assert wa_agent._sanitize_items(raw) == ""
-
-
 def test_sanitize_summary_caps_length():
     raw = "Sentence one. " * 200
     summary = wa_agent._sanitize_summary(raw)
     assert len(summary) <= wa_agent._SUMMARY_MAX_CHARS
+
+
+def test_thread_update_contract_defaults_to_no_items():
+    update = ThreadUpdate(title="A title", summary="A summary.")
+    assert update.items == []
 
 
 def test_yaml_str_survives_hostile_titles_through_frontmatter_round_trip():
@@ -459,3 +467,78 @@ def test_yaml_str_survives_hostile_titles_through_frontmatter_round_trip():
     )
     page = parse_page(page_text)
     assert page.frontmatter.title == hostile_title
+
+
+async def test_new_thread_dates_come_from_the_messages_not_the_clock(
+    vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Backfilled history must not look like it happened today -
+    opened_at/last_message_at drive the stale check and the channel
+    index's "last <date>"."""
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "batch_n", 2)
+    monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
+
+    channel = "891-dates@g.us"
+    await _seed_channel(channel, title="Dates")
+    async with get_session() as session:
+        for i, ts in enumerate(("2026-09-18T10:02:00Z", "2026-09-19T11:30:00Z")):
+            session.add(
+                MessageBuffer(
+                    message_id=f"dt-{i}",
+                    channel=channel,
+                    event_type="message.backfill",
+                    payload=json.dumps(
+                        message_event(f"dt-{i}", channel, f"old message {i}", sender=f"{i}@x", timestamp=ts)
+                    ),
+                )
+            )
+        await session.commit()
+
+    result = await wa_agent.run_batch(channel, vault, _worker())
+    assert result is not None
+
+    page = parse_page((await vault.read(f"channels/dates/{result.threads_created[0]}.md")).content)
+    assert page.frontmatter.opened_at == datetime(2026, 9, 18, 10, 2, tzinfo=UTC)
+    assert page.frontmatter.last_message_at == datetime(2026, 9, 19, 11, 30, tzinfo=UTC)
+    assert result.threads_created[0].startswith("20260918-")  # slug dated by the first message too
+
+
+async def test_run_batch_never_ingests_the_logs_channel(
+    vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
+):
+    """The logs channel is the bot talking to itself - no threads, no
+    model calls - but its buffered rows are still drained so they don't
+    pile up unprocessed forever."""
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "batch_n", 1)
+    monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
+
+    channel = "892-logs@g.us"
+    async with get_session() as session:
+        session.add(Channel(jid=channel, kind="logs", title="Logs"))
+        await session.commit()
+    ids = await _seed_messages(channel, ["⚠️ *ingest_tick* failed: boom"])
+
+    try:
+        worker = _worker()
+        result = await wa_agent.run_batch(channel, vault, worker)
+        assert result is not None
+        assert result.threads_created == [] and result.threads_updated == []
+        assert result.model_calls == 0
+        assert worker.assignment_prompts == [] and worker.update_prompts == []
+        assert await vault.list("channels/logs") == []
+
+        async with get_session() as session:
+            row = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == ids[0]))
+            chan = await session.scalar(select(Channel).where(Channel.jid == channel))
+        assert row.processed is True  # drained, not left to accumulate
+        assert chan.cursor == ids[0]
+    finally:
+        # `logs` is a singleton kind and the test DB is shared - leaving
+        # this row behind breaks every later /setup logs test.
+        async with get_session() as session:
+            await session.execute(delete(Channel).where(Channel.jid == channel))
+            await session.commit()

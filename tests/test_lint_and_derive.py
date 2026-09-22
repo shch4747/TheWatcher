@@ -43,10 +43,11 @@ def test_mangled_page_is_flagged_not_fixed():
     # reported, never silently coerced to a valid value.
     assert any("not-a-real-status" in i.message or "status" in i.message for i in issues)
 
-    # PII in the Brief section is caught.
+    # PII is NOT flagged: ADR-0012 amends ADR-0009 - this wiki is
+    # internal, and a number a member actually wrote is data to keep.
     messages = " ".join(i.message for i in issues)
-    assert "devansh@example.com" in messages
-    assert "98765 43210" in messages
+    assert "devansh@example.com" not in messages
+    assert "98765 43210" not in messages
 
     # the source text itself is untouched - lint never repairs in place.
     assert (FIXTURES / "project_mangled.md").read_text() == text
@@ -60,14 +61,16 @@ def test_lint_report_renders_issues():
     assert render_lint_report([]) == "# Lint report\n\nNo issues.\n"
 
 
-def test_dates_and_message_ids_are_not_flagged_as_pii():
-    text = (FIXTURES / "project_watcher.md").read_text()
-    issues = lint_text("project_watcher.md", text)
-    errors = [i for i in issues if "phone" in i.message]
-    assert errors == []
+def test_lint_never_reports_pii():
+    """No page, however many numbers it contains, produces a PII issue
+    (ADR-0012). The detectors themselves still work - see below - they
+    are just not applied by lint or ingestion any more."""
+    text = (FIXTURES / "project_mangled.md").read_text()
+    issues = lint_text("project_mangled.md", text)
+    assert [i for i in issues if "phone" in i.message or "email" in i.message] == []
 
 
-def test_contains_pii_and_redact_pii():
+def test_contains_pii_and_redact_pii_still_work_for_opt_in_callers():
     assert contains_pii("919244352208@s.whatsapp.net") is True
     assert contains_pii("+91 98765 43210") is True
     assert contains_pii("2026-09-18 10:00") is False

@@ -130,14 +130,29 @@ def default_vault_client() -> VaultClient:
     rooted at VAULT_ROOT - the same live-vs-stand-in pattern as
     `shared.cms.interface.default_cms_client()`. Safe default for a
     fresh deploy: nothing writes to a real wiki until you explicitly
-    configure Lapis credentials."""
+    configure Lapis credentials.
+
+    The client is wrapped in `ObservedVaultClient` so every write and
+    delete lands in the `obs_vault_ops` audit table (ADR-0013). Wrapping
+    here rather than at the call sites is what makes the audit complete:
+    every agent, command and job in the repo gets its vault client from
+    this function. Tests that construct a `LocalDirClient` directly are
+    deliberately left unwrapped.
+    """
     from pathlib import Path
 
     from shared.config import settings
 
+    # Imported here, not at module scope: shared.observability.vault
+    # imports this module for the VaultClient protocol.
+    from shared.observability.vault import ObservedVaultClient
+
+    inner: VaultClient
     if settings.lapis_token:
-        return LapisClient(settings.lapis_base_url, settings.lapis_vault_id, token=settings.lapis_token)
-    return LocalDirClient(Path(settings.vault_root))
+        inner = LapisClient(settings.lapis_base_url, settings.lapis_vault_id, token=settings.lapis_token)
+    else:
+        inner = LocalDirClient(Path(settings.vault_root))
+    return ObservedVaultClient(inner)
 
 
 async def check_vault_connection(vault: VaultClient) -> dict:

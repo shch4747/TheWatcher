@@ -12,7 +12,7 @@ import hmac
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import httpx
 from pydantic import BaseModel
@@ -44,6 +44,7 @@ from shared.gateway.commands import (
 )
 from shared.gateway.events import GowaEvent as GowaEvent  # re-exported for agents/wa_agent
 from shared.gateway.events import parse_gowa_event, wrap_backfilled_message
+from shared.gateway.events import parse_gowa_timestamp as parse_gowa_timestamp  # re-exported
 from shared.gateway.gowa_client import GowaClient
 from shared.scheduler.interface import due_jobs, ledger_tail, run_job
 from shared.wiki.interface import (
@@ -472,7 +473,10 @@ async def health() -> str:
     lines.append(f"gowa: {'✅ ok' if gowa_result.get('ok') else '❌ ' + str(gowa_result.get('error'))}")
 
     vault = default_vault_client()
-    vault_kind = "Lapis (live)" if isinstance(vault, LapisClient) else "local directory"
+    # unwrap the observability audit wrapper (ADR-0013) before asking
+    # what backend this really is
+    backend = getattr(vault, "inner", vault)
+    vault_kind = "Lapis (live)" if isinstance(backend, LapisClient) else "local directory"
     vault_result = await check_vault_connection(vault)
     vault_status = "✅ ok" if vault_result.get("ok") else f"❌ {vault_result.get('error')}"
     lines.append(f"vault: {vault_status} ({vault_kind})")
@@ -512,8 +516,21 @@ async def health() -> str:
     return "\n".join(lines)
 
 
+# Everything is stored in UTC; `/health` is read by a Bot Admin on their
+# phone in Delhi, so it renders in IST. A fixed offset rather than
+# ZoneInfo("Asia/Kolkata") on purpose: IST has no DST, and the slim
+# Docker base image ships no tzdata.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
 def _isoformat(dt: datetime | None) -> str:
-    return dt.strftime("%Y-%m-%d %H:%M UTC") if dt else "unknown"
+    if dt is None:
+        return "unknown"
+    # SQLite drops the tzinfo on round-trip; those timestamps were
+    # written as UTC, so label them before converting (without this the
+    # times would silently shift by 5.5 hours the wrong way).
+    aware = dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+    return aware.astimezone(IST).strftime("%Y-%m-%d %H:%M IST")
 
 
 async def link(cmd: LinkCommand, requested_by: str) -> str:
