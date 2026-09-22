@@ -1,4 +1,4 @@
-.PHONY: dev test lint typecheck check check-gowa check-lapis add-admin benchmark
+.PHONY: dev test lint typecheck check check-gowa check-lapis add-admin reset-threads benchmark
 
 dev: ## Run the app locally (main.py: FastAPI + scheduler tick loop)
 	uv run python main.py
@@ -25,6 +25,9 @@ check-lapis: ## Test the Lapis (or local vault) connection in isolation
 
 add-admin: ## make add-admin WA=919876543210@s.whatsapp.net
 	uv run python scripts/add_bot_admin.py "$(WA)"
+
+reset-threads: ## Delete all thread pages + reset cursors for every watched channel (asks to confirm)
+	uv run python scripts/reset_threads.py
 
 benchmark: ## Worker model benchmark (needs MODELS_API_KEY - real, billed calls)
 	uv run python scripts/run_worker_benchmark.py
