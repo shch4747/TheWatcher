@@ -51,6 +51,39 @@ class ScriptedWorker(TextModelClient):
         return TextResult(text=text, input_tokens=10, output_tokens=10)
 
 
+class SlopWorker(TextModelClient):
+    """Reproduces the exact role-confusion failure a small Worker model
+    produced in production: it answers the message content
+    conversationally (multi-line, addressed to "you", chatty) instead
+    of following the skill's output contract, for every skill."""
+
+    def __init__(self):
+        self.model_name = "slop-worker"
+
+    async def generate(self, prompt: str, system: str | None = None):  # type: ignore[override]
+        from shared.models.schemas import TextResult
+
+        if system and "title" in system.lower():
+            text = (
+                "Congratulations, if you're telling me a baby just arrived! \U0001f389 "
+                "Newborns do mostly just exist at first — though fun fact, they can "
+                "actually hear from day one; it's talking back that takes a while.\n\n"
+                "But if you're describing how *you* feel — newly arrived somewhere, "
+                "unable to connect, just existing — I'd genuinely like to hear more "
+                "about that. Which is it: a new little person in the world, or a feeling "
+                "you're putting into words?"
+            )
+        elif system and "Items" in system:
+            text = (
+                "It looks like you've pasted two WhatsApp message logs from the same "
+                "sender. There's no question or instruction attached, so I'm not sure "
+                "what you'd like me to do. What are you looking for?"
+            )
+        else:
+            text = "Interesting — sounds like you're describing pure existence mode. Is this philosophy?"
+        return TextResult(text=text, input_tokens=10, output_tokens=10)
+
+
 @pytest.fixture
 def vault(tmp_path: Path) -> LocalDirClient:
     return LocalDirClient(tmp_path)
@@ -160,6 +193,67 @@ async def test_run_batch_creates_new_thread_with_summary_items_timeline(
     assert notice.agent == "project_agent"
 
 
+async def test_run_batch_sanitizes_role_confused_worker_output(
+    vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Reproduction of a real production incident: a small Worker model
+    answered raw message content conversationally instead of titling/
+    summarizing/extracting it, and the unsanitized output got saved
+    straight into a thread page - a multi-paragraph chat reply as the
+    title (corrupting frontmatter and producing an absurd slug), and a
+    chatty non-item as the sole Items line."""
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "batch_n", 1)
+    monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
+
+    channel = "888-slop-test@g.us"
+    await _seed_channel(channel, title="Slop Test")
+    await _seed_messages(channel, ["Just born", "Cannot listen or talk only exist"])
+
+    question = "Which thread does this message belong to?\n\nMessage: Just born"
+    question2 = "Which thread does this message belong to?\n\nMessage: Cannot listen or talk only exist"
+    decision = FixtureDecisionModel(
+        choices={
+            question: ChoiceResult(option="new-thread", probabilities={"new-thread": 0.95}),
+            question2: ChoiceResult(option="new-thread", probabilities={"new-thread": 0.95}),
+        }
+    )
+    worker = SlopWorker()
+
+    result = await wa_agent.run_batch(channel, vault, decision, worker)
+    assert result is not None
+    assert len(result.threads_created) == 1
+
+    slug = result.threads_created[0]
+    # the slug (and every filename derived from it) must stay short and
+    # sane, never a slugified multi-paragraph chat reply
+    assert len(slug) < 100
+
+    page_content = (await vault.read(f"channels/slop-test/{slug}.md")).content
+    page = parse_page(page_content)
+
+    title = page.frontmatter.title
+    assert "\n" not in title  # frontmatter can't survive a multi-line scalar
+    assert len(title) <= wa_agent._TITLE_MAX_CHARS
+    # the second paragraph (a separate reply about "you") must never
+    # have survived - single-line truncation cuts it off entirely
+    assert "putting into words" not in title
+
+    # frontmatter is still valid YAML and round-trips through the parser
+    # (parse_page raises on malformed frontmatter, so getting here at
+    # all is already the assertion; re-check the title survives intact)
+    reparsed = parse_page(page_content)
+    assert reparsed.frontmatter.title == title
+
+    # the chatty "I'm not sure what you'd like me to do" text never
+    # matched the item grammar, so Items has no lines inside the fence
+    items_inner = page.section("Items").body.replace("<!-- watcher:managed -->", "")
+    items_inner = items_inner.replace("<!-- /watcher -->", "").strip()
+    assert items_inner == ""
+    assert "I'm not sure" not in page.section("Items").body
+
+
 async def test_run_batch_updates_existing_thread_summary_items_appends_timeline_keeps_notes(
     vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
 ):
@@ -239,3 +333,62 @@ async def test_run_batch_returns_none_when_not_ready(vault: LocalDirClient):
     worker = ScriptedWorker()
     result = await wa_agent.run_batch("666-notready@g.us", vault, decision, worker)
     assert result is None
+
+
+def test_sanitize_title_collapses_to_single_line_and_caps_length():
+    raw = "Congratulations! \U0001f389\n\nWhich is it: a new little person, or a feeling?"
+    title = wa_agent._sanitize_title(raw)
+    assert "\n" not in title
+    assert title.startswith("Congratulations")
+    assert len(title) <= wa_agent._TITLE_MAX_CHARS
+
+    long_one_liner = "x" * 200
+    assert len(wa_agent._sanitize_title(long_one_liner)) <= wa_agent._TITLE_MAX_CHARS
+
+    assert wa_agent._sanitize_title("") == "Untitled thread"
+    assert wa_agent._sanitize_title('  "Quoted title"  ') == "Quoted title"
+
+
+def test_sanitize_items_drops_non_conforming_lines():
+    raw = (
+        "It looks like you've pasted two message logs. What are you looking for?\n"
+        "- [ ] Book the seminar hall [kind:: task] [owner:: [[Aira]]] [src:: m1] ^i-0001\n"
+        "Some trailing chatty aside with no grammar at all.\n"
+        "- text [kind:: resource] [src:: m2] ^i-0002"
+    )
+    cleaned = wa_agent._sanitize_items(raw)
+    lines = cleaned.splitlines()
+    assert len(lines) == 2
+    assert all("[kind::" in line and "[src::" in line for line in lines)
+    assert "looking for" not in cleaned
+    assert "trailing chatty aside" not in cleaned
+
+
+def test_sanitize_items_returns_empty_for_pure_chatter():
+    raw = "I'm not sure what you'd like me to do here - can you clarify?"
+    assert wa_agent._sanitize_items(raw) == ""
+
+
+def test_sanitize_summary_caps_length():
+    raw = "Sentence one. " * 200
+    summary = wa_agent._sanitize_summary(raw)
+    assert len(summary) <= wa_agent._SUMMARY_MAX_CHARS
+
+
+def test_yaml_str_survives_hostile_titles_through_frontmatter_round_trip():
+    from shared.wiki.templates import render_new_thread_page
+
+    hostile_title = 'Line one\nLine two: with a colon and "quotes" and # a hash'
+    page_text = render_new_thread_page(
+        slug="20260101-hostile",
+        title=hostile_title,
+        channel_title="Some Channel",
+        initiative=None,
+        summary="ok",
+        items_text="",
+        timeline_lines=[],
+        participants=[],
+        message_ids=[],
+    )
+    page = parse_page(page_text)
+    assert page.frontmatter.title == hostile_title

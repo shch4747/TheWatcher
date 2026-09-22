@@ -5,13 +5,30 @@ would produce the same shape for a page missing them.
 """
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, date, datetime
+
+SLUG_MAX_LEN = 80
 
 
 def slugify(title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.strip().lower()).strip("-")
+    slug = slug[:SLUG_MAX_LEN].rstrip("-")
     return slug or "untitled"
+
+
+def yaml_str(value: str) -> str:
+    """Safely encode free text as a YAML scalar for hand-built
+    frontmatter (Wiki Format: pages are built by string templates, not
+    `yaml.dump`, so nothing else escapes this). A JSON string literal is
+    always a valid YAML double-quoted scalar, so this is cheap and
+    exact: embedded newlines, quotes, colons, or a leading `-`/`#`/`[`
+    can never corrupt the frontmatter block or spill past the field
+    they belong to - which an unescaped LLM-generated title otherwise
+    can (it happened: a title containing blank lines and no quoting
+    silently ran on past its own `title:` line)."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def render_new_project_page(title: str, lead: str, slug: str | None = None) -> str:
@@ -21,7 +38,7 @@ def render_new_project_page(title: str, lead: str, slug: str | None = None) -> s
         "---\n"
         "type: project\n"
         f"slug: {slug}\n"
-        f"title: {title}\n"
+        f"title: {yaml_str(title)}\n"
         "status: proposed\n"
         f'lead: "[[{lead}]]"\n'
         "members: []\n"
@@ -45,7 +62,7 @@ def render_new_event_page(title: str, lead: str, slug: str | None = None) -> str
         "---\n"
         "type: event\n"
         f"slug: {slug}\n"
-        f"title: {title}\n"
+        f"title: {yaml_str(title)}\n"
         "status: proposed\n"
         f'lead: "[[{lead}]]"\n'
         "members: []\n"
@@ -69,7 +86,7 @@ def render_new_member_page(title: str, role: str = "Executive", slug: str | None
         "---\n"
         "type: member\n"
         f"slug: {slug}\n"
-        f"title: {title}\n"
+        f"title: {yaml_str(title)}\n"
         f"role: {role}\n"
         "status: active\n"
         "whatsapp: linked\n"
@@ -105,7 +122,7 @@ def render_new_thread_page(
         f"slug: {slug}\n"
         f'channel: "[[{channel_title}]]"\n'
         f"{initiative_line}"
-        f"title: {title}\n"
+        f"title: {yaml_str(title)}\n"
         "state: active\n"
         f"opened_at: {now}\n"
         f"last_message_at: {now}\n"
@@ -137,7 +154,7 @@ def render_new_channel_page(
         "---\n"
         "type: channel\n"
         f"slug: {slug}\n"
-        f"title: {title}\n"
+        f"title: {yaml_str(title)}\n"
         f"kind: {kind}\n"
         f"{initiative_line}"
         "cursor:\n"
