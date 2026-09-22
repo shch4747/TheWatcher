@@ -141,6 +141,43 @@ async def test_logs_is_a_singleton_kind(vault: LocalDirClient):
     assert await gateway.get_channel("logs-group-2@g.us") is None
 
 
+async def test_setup_singleton_kind_defaults_title_and_writes_channel_page(vault: LocalDirClient):
+    """Previously coordis/exes/research/all/logs/other channels got no
+    title (fell back to a raw-jid-derived directory name in Lapis, e.g.
+    "120363406427444035-g-us") and no channels/<slug>.md page at all -
+    only project/event channels did."""
+    await _clear_singleton_channel("coordis")
+    group = "coordis-default-title@g.us"
+    reply = await gateway.setup(group, ADMIN, SetupCommand(kind="coordis", title=None), vault)
+    assert reply == "watching"
+
+    channel = await gateway.get_channel(group)
+    assert channel is not None
+    assert channel.title == "Coordis"
+
+    page = (await vault.read("channels/coordis.md")).content
+    assert "type: channel" in page
+    assert '"Coordis"' in page
+    assert "## Active threads" in page
+
+
+async def test_setup_singleton_kind_repeat_backfill_does_not_clobber_page(vault: LocalDirClient):
+    await _clear_singleton_channel("coordis")
+    group = "coordis-backfill@g.us"
+    await gateway.setup(group, ADMIN, SetupCommand(kind="coordis", title=None), vault)
+    await vault.write(
+        "channels/coordis/some-thread.md", "unrelated thread content", base_revision=""
+    )
+
+    # re-running /setup coordis (e.g. to pick up this fix on an
+    # already-registered channel) must not overwrite the existing page
+    first_page = await vault.read("channels/coordis.md")
+    await gateway.setup(group, ADMIN, SetupCommand(kind="coordis", title=None), vault)
+    second_page = await vault.read("channels/coordis.md")
+    assert first_page.content == second_page.content
+    assert (await vault.read("channels/coordis/some-thread.md")).content == "unrelated thread content"
+
+
 async def test_setup_from_non_admin_is_refused(vault: LocalDirClient):
     group = "333-nonadmin@g.us"
     reply = await gateway.setup(

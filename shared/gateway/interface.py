@@ -269,6 +269,34 @@ async def _initiative_page_exists(vault: VaultClient, kind: str, slug: str) -> b
         return False
 
 
+_DEFAULT_KIND_TITLES = {
+    "coordis": "Coordis",
+    "exes": "Exes",
+    "research": "Research",
+    "all": "All",
+    "logs": "Logs",
+    "other": "Other",
+}
+
+
+async def _ensure_channel_page(vault: VaultClient, title: str, kind: str) -> None:
+    """`coordis`/`exes`/`research`/`all`/`logs`/`other` channels never
+    got a `channels/<slug>.md` index page before - only project/event
+    channels did - so their vault directory name was whatever
+    `slugify(channel.title or channel_jid)` fell back to (the raw jid,
+    since title was never set either), and there was nowhere for
+    `regenerate_channel_threads_index` to write Active/Stale/Archived
+    links even once titles were fixed. Idempotent: a repeat `/setup`
+    (e.g. to backfill a title on an already-registered channel) never
+    clobbers an existing page."""
+    slug = slugify(title)
+    path = f"channels/{slug}.md"
+    try:
+        await vault.read(path)
+    except (FileNotFoundError, OSError, httpx.HTTPStatusError):
+        await vault.write(path, render_new_channel_page(title, kind), base_revision="")
+
+
 async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: VaultClient) -> str:
     """`/setup [kind] [<Title>]`. Singleton kinds refuse a second channel;
     project/event with a missing initiative page opens a setup_session
@@ -276,15 +304,14 @@ async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: V
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /setup."
 
-    if cmd.kind in ("coordis", "exes", "research", "all", "logs"):
-        existing = await _channel_by_kind(cmd.kind)
-        if existing is not None and existing.jid != channel_jid:
-            return f"A {cmd.kind} channel is already set up; refusing a second one."
-        await _upsert_channel(channel_jid, cmd.kind, cmd.title, initiative=None)
-        return "watching"
-
-    if cmd.kind == "other":
-        await _upsert_channel(channel_jid, cmd.kind, cmd.title, initiative=None)
+    if cmd.kind in ("coordis", "exes", "research", "all", "logs", "other"):
+        if cmd.kind != "other":
+            existing = await _channel_by_kind(cmd.kind)
+            if existing is not None and existing.jid != channel_jid:
+                return f"A {cmd.kind} channel is already set up; refusing a second one."
+        title = cmd.title or _DEFAULT_KIND_TITLES[cmd.kind]
+        await _upsert_channel(channel_jid, cmd.kind, title, initiative=None)
+        await _ensure_channel_page(vault, title, cmd.kind)
         return "watching"
 
     # project / event
