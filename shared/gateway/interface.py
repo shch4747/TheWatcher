@@ -48,6 +48,7 @@ from shared.gateway.gowa_client import GowaClient
 from shared.scheduler.interface import due_jobs, ledger_tail, run_job
 from shared.wiki.interface import (
     LapisClient,
+    McpToolError,
     VaultClient,
     append_to_section,
     check_vault_connection,
@@ -265,7 +266,7 @@ async def _initiative_page_exists(vault: VaultClient, kind: str, slug: str) -> b
     try:
         await vault.read(path)
         return True
-    except (FileNotFoundError, OSError, httpx.HTTPStatusError):
+    except (FileNotFoundError, OSError, httpx.HTTPStatusError, McpToolError):
         return False
 
 
@@ -293,7 +294,7 @@ async def _ensure_channel_page(vault: VaultClient, title: str, kind: str) -> Non
     path = f"channels/{slug}.md"
     try:
         await vault.read(path)
-    except (FileNotFoundError, OSError, httpx.HTTPStatusError):
+    except (FileNotFoundError, OSError, httpx.HTTPStatusError, McpToolError):
         await vault.write(path, render_new_channel_page(title, kind), base_revision="")
 
 

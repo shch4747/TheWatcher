@@ -29,6 +29,7 @@ from shared.models.interface import decide_with_fallback, generate
 from shared.models.skill_loader import load_skills
 from shared.models.text import TextModelClient
 from shared.wiki.interface import (
+    McpToolError,
     VaultClient,
     append_to_section,
     dump_page,
@@ -639,7 +640,7 @@ async def regenerate_channel_threads_index(vault: VaultClient, channel: Channel,
     page_path = f"channels/{slugify(channel.title or channel.jid)}.md"
     try:
         existing = await vault.read(page_path)
-    except (FileNotFoundError, OSError, httpx.HTTPStatusError):
+    except (FileNotFoundError, OSError, httpx.HTTPStatusError, McpToolError):
         return
     page = parse_page(existing.content)
     if page.page_type != "channel":
