@@ -258,3 +258,70 @@ async def test_run_batch_regenerates_channel_active_threads_section(
     channel_page = parse_page((await vault.read("channels/idx.md")).content)
     active_body = channel_page.section("Active threads").body
     assert slug in active_body or "Booking the seminar hall" in active_body
+
+
+class UntitledWorker(TextModelClient):
+    """Every title request comes back PII-laden (rejected by
+    contains_pii, falling back to "Untitled thread") - reproduces a
+    real production collision: two distinct new threads created in the
+    same batch, on the same day, both landing on the same slug."""
+
+    def __init__(self):
+        self.model_name = "untitled-worker"
+
+    async def generate(self, prompt: str, system: str | None = None):  # type: ignore[override]
+        from shared.models.schemas import TextResult
+
+        if system and "Summary" in system:
+            text = "A test thread."
+        elif system and "Items" in system:
+            text = ""
+        elif system and "title" in system:
+            text = "919244352208@s.whatsapp.net"  # PII - always rejected
+        else:
+            text = ""
+        return TextResult(text=text, input_tokens=1, output_tokens=1)
+
+
+async def test_run_batch_disambiguates_colliding_new_thread_slugs(
+    vault: LocalDirClient, monkeypatch: pytest.MonkeyPatch
+):
+    from shared.config import settings
+
+    monkeypatch.setattr(settings, "batch_n", 5)
+    monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
+
+    monkeypatch.setattr(settings, "batch_n", 3)
+    channel = "560-collide-test@g.us"
+    await _seed_channel(channel, title="Collide")
+    await _seed_raw_messages(
+        channel,
+        [
+            {"id": "col-1", "text": "call about the venue", "sender": "a@x"},
+            {"id": "col-2", "text": "just chatting, unrelated", "sender": "b@x"},
+            {"id": "col-3", "text": "a totally different topic", "sender": "c@x"},
+        ],
+    )
+    decision = FixtureDecisionModel(
+        choices={
+            "Which thread does this message belong to?\n\nMessage: call about the venue": ChoiceResult(
+                option="new-thread", probabilities={"new-thread": 0.95}
+            ),
+            "Which thread does this message belong to?\n\nMessage: just chatting, unrelated": ChoiceResult(
+                option="chatter", probabilities={"chatter": 0.95}
+            ),
+            "Which thread does this message belong to?\n\nMessage: a totally different topic": ChoiceResult(
+                option="new-thread", probabilities={"new-thread": 0.95}
+            ),
+        }
+    )
+    result = await wa_agent.run_batch(channel, vault, decision, UntitledWorker())
+    assert result is not None
+    assert len(result.threads_created) == 2
+    slugs = result.threads_created
+    assert len(set(slugs)) == 2  # distinct paths - no write collision
+    assert slugs[1].endswith("-2")  # disambiguated, not silently overwritten
+
+    for slug in slugs:
+        page = parse_page((await vault.read(f"channels/collide/{slug}.md")).content)
+        assert page.frontmatter.title == "Untitled thread"

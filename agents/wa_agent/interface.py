@@ -590,6 +590,7 @@ async def run_batch(
 
     result = BatchResult(channel=channel_jid, message_count=len(messages))
     threads_by_slug = {t.slug: t for t in active_threads}
+    used_slugs = {t.slug for t in active_threads}
     touched_channel = False
 
     for key, bucket_messages in buckets.items():
@@ -602,7 +603,20 @@ async def run_batch(
 
         if key.startswith(f"{NEW_THREAD}:"):
             title = await _mint_title(bucket_messages, worker_client, skills)
-            slug = f"{bucket_messages[0].received_at.strftime('%Y%m%d')}-{slugify(title)}"
+            base_slug = f"{bucket_messages[0].received_at.strftime('%Y%m%d')}-{slugify(title)}"
+            slug = base_slug
+            suffix = 2
+            while slug in used_slugs:
+                # Two distinct new threads in the same batch landing on
+                # the same date+title slug is real, not hypothetical -
+                # e.g. both fall back to "Untitled thread" (contains_pii
+                # rejected the model's actual title for both). A write
+                # colliding here isn't a stale-revision conflict our
+                # normal ConflictError handling catches - it's a genuine
+                # duplicate path, so disambiguate before ever writing.
+                slug = f"{base_slug}-{suffix}"
+                suffix += 1
+            used_slugs.add(slug)
             summary, items_text = await _generate_summary_and_items(
                 bucket_messages, "", worker_client, skills
             )
