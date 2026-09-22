@@ -95,6 +95,15 @@ class ResourceFrontmatter(Frontmatter):
     related: list[str] = []
     added_by: str | None = None
 
+class IdeaFrontmatter(Frontmatter):
+    type: Literal["idea"] = "idea"
+    lane: Literal["remedial", "bridged", "frontier", "event"]
+    trigger: list[str] = []
+    verdict: Literal["up", "down", "neutral"] | None = None
+    reason: str | None = None
+    reviewer: str | None = None
+    reviewed_at: datetime | None = None
+    published_at: datetime | None = None
 
 SCHEMA_BY_TYPE: dict[str, type[Frontmatter]] = {
     "member": MemberFrontmatter,
@@ -103,6 +112,7 @@ SCHEMA_BY_TYPE: dict[str, type[Frontmatter]] = {
     "channel": ChannelFrontmatter,
     "thread": ThreadFrontmatter,
     "resource": ResourceFrontmatter,
+    "idea": IdeaFrontmatter,
 }
 
 
@@ -152,6 +162,15 @@ SECTION_OWNERS: dict[str, dict[str, Owner]] = {
     "resource": {
         "Summary": "managed",
         "Notes": "human",
+    },
+    "idea": {
+        "Statement": "managed",
+        "Why now": "managed",
+        "Evidence": "managed",
+        "Existing leverage": "managed",
+        "Skill match": "managed",
+        "Risks": "managed",
+        "Notes": "shared",
     },
 }
 

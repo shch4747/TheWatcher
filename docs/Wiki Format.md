@@ -169,6 +169,29 @@ summary_cursor: 3EB1…
 ### resource (`resources/<slug>.md`)
 Frontmatter: `kind` (`paper | repo | talk | article | note`), `url`, `related` (initiative slugs), `added_by`. Sections: `Summary` (managed if agent-added, human otherwise), `Notes` (human). Today's freeform notes become `kind: note` with their text under Notes.
 
+### idea (`innovation/<date>-<slug>.md`) — Innovation Agent output
+---
+type: idea
+slug: 20260922-oauth-edge-case-harness
+title: Shared OAuth edge-case testing harness
+lane: remedial              # remedial | bridged | frontier | event
+trigger: ["[[projects/proj-auth-a]]", "[[projects/proj-auth-b]]"]   # empty for frontier
+verdict:                    # null until reviewed — the only thing a human sets
+reason:                     # optional, human-written
+reviewer:                   # wikilink, set alongside verdict
+reviewed_at:
+published_at: 2026-09-22T10:00:00+05:30
+---
+# Shared OAuth edge-case testing harness
+## Statement          managed (agent-written, locked — humans don't edit this)
+## Why now             managed
+## Evidence            managed (item grammar, block ids)
+- Both proj-auth-a and proj-auth-b failed on OAuth edge cases [status:: fact] [from:: [[projects/proj-auth-a]], [[projects/proj-auth-b]]] ^e-9f3c
+## Existing leverage   managed
+## Skill match         managed
+## Risks               managed
+## Notes               shared
+
 ### inbox (`inbox/<agent>.md`) — derived, read-only
 ```markdown
 - 2026-09-19T09:45 — [[channels/watcher/20260918-demo-date]] from 3EB1A2 ^n-…
