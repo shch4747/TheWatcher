@@ -349,6 +349,14 @@ def test_sanitize_title_collapses_to_single_line_and_caps_length():
     assert wa_agent._sanitize_title('  "Quoted title"  ') == "Quoted title"
 
 
+def test_sanitize_title_strips_leading_bullet_markers():
+    """Real observed output: a model handed a title as a bullet-point
+    list item ("- A participant asked what") instead of a plain title."""
+    assert wa_agent._sanitize_title("- A participant asked what") == "A participant asked what"
+    assert wa_agent._sanitize_title("* Booking the hall") == "Booking the hall"
+    assert wa_agent._sanitize_title("1. Moving the demo") == "Moving the demo"
+
+
 def test_sanitize_title_falls_back_when_model_comments_on_its_own_task():
     """Real observed failure, even with explicit anti-acknowledgement
     instructions in the prompt: the model describes the framing instead

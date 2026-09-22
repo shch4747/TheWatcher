@@ -390,6 +390,19 @@ def _looks_like_meta_commentary(title: str) -> bool:
     return bool(_META_COMMENTARY_RE.search(title))
 
 
+_TITLE_LEADING_MARKER_RE = re.compile(r"^[\-\*••]+\s*|^\d+[.)]\s*")
+
+
+def _strip_title_markers(text: str) -> str:
+    """Strip a leading list/bullet marker ("- ", "* ", "1. ") and
+    wrapping quotes/emphasis - a model asked for a short title
+    sometimes formats it as a bullet point (real observed output:
+    "- A participant asked what"), which isn't a title, it's a fragment
+    of a list the model imagined it was writing."""
+    text = _TITLE_LEADING_MARKER_RE.sub("", text.strip())
+    return text.strip().strip("\"'").strip("*_ ")
+
+
 def _sanitize_title(raw: str, fallback_text: str = "") -> str:
     """A title is frontmatter metadata and a slug source, not free
     prose - collapse to one line, strip wrapping quotes/markdown, and
@@ -404,11 +417,12 @@ def _sanitize_title(raw: str, fallback_text: str = "") -> str:
     raw first message's own words instead - always more useful than a
     meta-description, however trivial."""
     first_line = raw.strip().splitlines()[0] if raw.strip() else ""
-    first_line = first_line.strip().strip("\"'").strip("*_ ")
+    first_line = _strip_title_markers(first_line)
     first_line = re.sub(r"\s+", " ", first_line)
 
     if not first_line or _looks_like_meta_commentary(first_line):
         first_line = fallback_text.strip().splitlines()[0] if fallback_text.strip() else ""
+        first_line = _strip_title_markers(first_line)
         first_line = re.sub(r"\s+", " ", first_line)
 
     words = first_line.split(" ")
