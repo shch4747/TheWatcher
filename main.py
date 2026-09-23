@@ -23,7 +23,7 @@ from agents.wa_agent.interface import (
 from shared.config import settings
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
-from shared.gateway.interface import list_channels, notify_logs, register_message_hook
+from shared.gateway.interface import InboundMessage, list_channels, notify_logs, register_message_hook
 from shared.models.decision import default_decision_client
 from shared.models.text import client_for_model, worker_model
 from shared.observability.interface import ingest_run, setup_tracing
@@ -46,10 +46,10 @@ logging.basicConfig(
 SCHEDULER_POLL_SECONDS = 30
 
 
-async def _chat_hook(payload: dict, channel_jid: str) -> None:
+async def _chat_hook(message: InboundMessage) -> None:
     worker = worker_model()
     decision = default_decision_client(worker)
-    await handle_chat_message(payload, channel_jid, default_vault_client(), decision, worker)
+    await handle_chat_message(message, default_vault_client(), decision, worker)
 
 
 async def _ingest_tick(force: bool = False) -> None:

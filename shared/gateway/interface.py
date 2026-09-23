@@ -14,7 +14,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta, timezone
 
-import httpx
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -30,6 +29,16 @@ from shared.db import (
     SetupSession,
     get_session,
 )
+
+# The message buffer's interface, re-exported: consumers read messages
+# through these, never through `messages_buffer` rows.
+from shared.gateway.buffer import InboundMessage as InboundMessage
+from shared.gateway.buffer import get_context as get_context
+from shared.gateway.buffer import get_message as get_message
+from shared.gateway.buffer import get_messages as get_messages
+from shared.gateway.buffer import mark_consumed as mark_consumed
+from shared.gateway.buffer import pending_messages as pending_messages
+from shared.gateway.buffer import to_inbound
 from shared.gateway.commands import (
     ChannelsCommand,
     Command,
@@ -42,9 +51,7 @@ from shared.gateway.commands import (
     is_group_jid,
     parse_command,
 )
-from shared.gateway.events import GowaEvent as GowaEvent  # re-exported for agents/wa_agent
 from shared.gateway.events import parse_gowa_event, wrap_backfilled_message
-from shared.gateway.events import parse_gowa_timestamp as parse_gowa_timestamp  # re-exported
 from shared.gateway.gowa_client import GowaClient
 from shared.scheduler.interface import due_jobs, ledger_tail, run_job
 from shared.wiki.interface import (
@@ -56,11 +63,11 @@ from shared.wiki.interface import (
     default_vault_client,
     dump_page,
     parse_page,
+    read_if_exists,
     render_new_channel_page,
     render_new_event_page,
     render_new_member_page,
     render_new_project_page,
-    read_if_exists,
     slugify,
 )
 
@@ -74,7 +81,7 @@ SETUP_STEPS = ["lead", "brief", "timeline"]
 # rather than imported directly - shared/gateway must not depend on
 # agents/wa_agent (AGENTS.md: agents depend on shared, never the
 # reverse). The application entrypoint wires this at startup.
-MessageHook = Callable[[dict, str], Awaitable[None]]
+MessageHook = Callable[[InboundMessage], Awaitable[None]]
 _message_hooks: list[MessageHook] = []
 
 
@@ -163,9 +170,11 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
             if not existing.processed:
                 existing.payload = raw_body.decode()
                 existing.event_type = event_type
+                # an edit is new activity: the batch's quiet period restarts
+                existing.received_at = datetime.now(UTC)
                 await session.commit()
                 return True
-            return False  # processed messages are immutable; batch cutter resets the quiet timer (Phase 4)
+            return False  # processed messages are immutable
         if existing is not None:
             return False
         buffered = MessageBuffer(
@@ -204,9 +213,10 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
     elif event_type == "message.reaction" and sender:
         await handle_reaction(sender, event.reacted_message_id, event.reaction_emoji)
     elif event_type == "message":
+        message = to_inbound(buffered)
         for hook in _message_hooks:
             try:
-                await hook(payload, channel)
+                await hook(message)
             except Exception:  # noqa: BLE001 - a broken hook must not break intake
                 logger.exception("message hook %r failed for channel %s", hook, channel)
     return True
@@ -803,59 +813,6 @@ async def expire_stale_proposals(now: datetime | None = None) -> int:
 
 def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
-
-
-def _unwrap_stored_payload(raw: dict) -> dict:
-    """Buffered rows store the full gowa event envelope
-    (`{"event", "payload": {...}}`); callers asking for "the message"
-    want the inner fields, not the envelope. Falls back to the raw dict
-    unchanged if there's no "payload" key (e.g. a hand-built test row)."""
-    inner = raw.get("payload")
-    return inner if isinstance(inner, dict) else raw
-
-
-async def get_message(message_id: str) -> dict | None:
-    """Resolve a message by id from what the Gateway has already buffered
-    (ADR-0002: gowa is the raw source of truth; the buffer is our cache of
-    everything we've ingested)."""
-    async with get_session() as session:
-        row = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == message_id))
-    return _unwrap_stored_payload(json.loads(row.payload)) if row else None
-
-
-async def get_messages(channel: str, since_id: str | None = None, limit: int = 100) -> list[dict]:
-    async with get_session() as session:
-        stmt = select(MessageBuffer).where(MessageBuffer.channel == channel)
-        if since_id:
-            anchor_stmt = select(MessageBuffer.id).where(MessageBuffer.message_id == since_id)
-            anchor = await session.scalar(anchor_stmt)
-            if anchor is not None:
-                stmt = stmt.where(MessageBuffer.id > anchor)
-        stmt = stmt.order_by(MessageBuffer.id).limit(limit)
-        rows = await session.scalars(stmt)
-    return [_unwrap_stored_payload(json.loads(r.payload)) for r in rows]
-
-
-async def get_context(message_id: str, before: int = 5, after: int = 5) -> list[dict]:
-    """Messages around `message_id` in the same channel, in order."""
-    async with get_session() as session:
-        target = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == message_id))
-        if target is None:
-            return []
-        before_rows = await session.scalars(
-            select(MessageBuffer)
-            .where(MessageBuffer.channel == target.channel, MessageBuffer.id < target.id)
-            .order_by(MessageBuffer.id.desc())
-            .limit(before)
-        )
-        after_rows = await session.scalars(
-            select(MessageBuffer)
-            .where(MessageBuffer.channel == target.channel, MessageBuffer.id > target.id)
-            .order_by(MessageBuffer.id)
-            .limit(after)
-        )
-    ordered = list(reversed(list(before_rows))) + [target] + list(after_rows)
-    return [_unwrap_stored_payload(json.loads(r.payload)) for r in ordered]
 
 
 async def request_history(channel: str, count: int) -> int:

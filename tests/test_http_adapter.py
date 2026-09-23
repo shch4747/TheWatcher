@@ -50,7 +50,7 @@ async def test_get_message_endpoint_404_and_hit(client: httpx.AsyncClient):
 
     assert missing.status_code == 404
     assert hit.status_code == 200
-    assert hit.json()["id"] == "http-m1"
+    assert hit.json()["message_id"] == "http-m1"
 
 
 async def test_channels_endpoints(client: httpx.AsyncClient):

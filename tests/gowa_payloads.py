@@ -42,3 +42,22 @@ def reaction_event(
             "reacted_message_id": reacted_message_id,
         },
     }
+
+
+def inbound(
+    message_id: str,
+    chat_id: str,
+    text: str = "",
+    sender: str = "member@x",
+    replied_to_id: str | None = None,
+):
+    """A live message as the Gateway hands it to a message hook."""
+    from datetime import UTC, datetime
+
+    from shared.gateway.interface import InboundMessage
+
+    now = datetime.now(UTC)
+    return InboundMessage(
+        row_id=0, message_id=message_id, channel=chat_id, received_at=now, sent_at=now,
+        text=text, sender=sender, replied_to_id=replied_to_id,
+    )

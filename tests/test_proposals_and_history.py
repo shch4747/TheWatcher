@@ -3,6 +3,7 @@ Proposal executes on a 👍 from a Bot Admin within 24h; expired proposals
 are dropped with a notice; request_history backfills a channel."""
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -14,7 +15,7 @@ from shared.gateway.app import app as gateway_app
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
-from tests.gowa_payloads import reaction_event
+from tests.gowa_payloads import message_event, reaction_event
 
 ADMIN = "919999911111@s.whatsapp.net"
 
@@ -121,22 +122,22 @@ async def test_get_message_and_get_messages_and_get_context():
                     message_id=f"m{i}",
                     channel=channel,
                     event_type="message",
-                    payload=f'{{"id":"m{i}","n":{i}}}',
+                    payload=json.dumps(message_event(f"m{i}", channel, f"text {i}", sender="a@x")),
                 )
             )
         await session.commit()
 
-    assert (await gateway.get_message("m2"))["n"] == 2
+    assert (await gateway.get_message("m2")).text == "text 2"
     assert await gateway.get_message("nope") is None
 
     msgs = await gateway.get_messages(channel, limit=10)
-    assert [m["n"] for m in msgs] == [0, 1, 2, 3, 4]
+    assert [m.message_id for m in msgs] == ["m0", "m1", "m2", "m3", "m4"]
 
     since = await gateway.get_messages(channel, since_id="m1", limit=10)
-    assert [m["n"] for m in since] == [2, 3, 4]
+    assert [m.message_id for m in since] == ["m2", "m3", "m4"]
 
     ctx = await gateway.get_context("m2", before=1, after=1)
-    assert [m["n"] for m in ctx] == [1, 2, 3]
+    assert [m.message_id for m in ctx] == ["m1", "m2", "m3"]
 
 
 async def test_request_history_backfills_and_flags_source():

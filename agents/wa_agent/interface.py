@@ -8,19 +8,20 @@ packages through *their* interfaces.
 """
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from shared.config import settings
-from shared.db import Channel, MessageBuffer, Notice, OutboundLog, aware_utc, get_session
+from shared.db import Channel, Notice, OutboundLog, get_session
 from shared.gateway.interface import (
+    InboundMessage,
+    get_channel,
     get_channel_by_kind,
     list_channels,
+    mark_consumed,
     notify_logs,
-    parse_gowa_event,
-    parse_gowa_timestamp,
+    pending_messages,
     propose_wiki_write,
     resolve_sender,
 )
@@ -56,18 +57,6 @@ __all__ = [
 NON_INGESTED_KINDS = frozenset({"logs"})
 
 
-def _extract_message(payload: dict) -> dict:
-    event = parse_gowa_event(payload)
-    return {
-        "id": event.message_id,
-        "text": event.text,
-        "sender": event.sender or "unknown",
-        "sender_name": event.sender_name,
-        "sent_at": parse_gowa_timestamp(event.timestamp),
-        "replied_to_id": event.replied_to_id,
-    }
-
-
 @dataclass
 class BatchResult:
     channel: str
@@ -86,8 +75,10 @@ def is_batch_ready(messages: list[BufferedMessage], now: datetime | None = None)
     if not messages:
         return False
     now = now or datetime.now(UTC)
-    first = messages[0].received_at
-    last = messages[-1].received_at
+    # min/max, not first/last: an edit moves an earlier message's
+    # received_at forward, and that activity restarts the quiet period too
+    first = min(m.received_at for m in messages)
+    last = max(m.received_at for m in messages)
 
     size_or_time_triggered = len(messages) >= settings.batch_n or (
         now - first >= timedelta(minutes=settings.batch_t_minutes)
@@ -96,33 +87,18 @@ def is_batch_ready(messages: list[BufferedMessage], now: datetime | None = None)
     return size_or_time_triggered and quiet_elapsed
 
 
-async def _unprocessed_messages(channel: str) -> list[BufferedMessage]:
-    async with get_session() as session:
-        rows = await session.scalars(
-            select(MessageBuffer)
-            .where(MessageBuffer.channel == channel, MessageBuffer.processed.is_(False))
-            .where(MessageBuffer.event_type.in_(("message", "message.backfill")))
-            .order_by(MessageBuffer.id)
-        )
-    out = []
-    for r in rows:
-        fields = _extract_message(json.loads(r.payload))
-        received_at = aware_utc(r.received_at)
-        assert received_at is not None  # MessageBuffer.received_at always has a default
-        out.append(
-            BufferedMessage(
-                row_id=r.id,
-                message_id=r.message_id,
-                channel=r.channel,
-                received_at=received_at,
-                text=fields["text"],
-                sender=fields["sender"],
-                sender_name=fields["sender_name"],
-                sent_at=fields["sent_at"],
-                replied_to_id=fields["replied_to_id"],
-            )
-        )
-    return out
+def _buffered(message: InboundMessage) -> BufferedMessage:
+    return BufferedMessage(
+        row_id=message.row_id,
+        message_id=message.message_id,
+        channel=message.channel,
+        received_at=message.received_at,
+        text=message.text,
+        sender=message.sender,
+        sender_name=message.sender_name,
+        sent_at=message.sent_at,
+        replied_to_id=message.replied_to_id,
+    )
 
 
 async def cut_batch(
@@ -134,7 +110,7 @@ async def cut_batch(
     entirely and cuts whatever's unprocessed right now - for "why hasn't
     this shown up yet" debugging, not something the scheduled tick ever
     sets."""
-    messages = await _unprocessed_messages(channel)
+    messages = [_buffered(m) for m in await pending_messages(channel)]
     if not messages:
         return None
     if not force and not is_batch_ready(messages, now):
@@ -216,12 +192,7 @@ async def _sender_names(messages: list[BufferedMessage]) -> SenderNames:
 
 
 async def _mark_processed(rows: list[BufferedMessage]) -> None:
-    async with get_session() as session:
-        for m in rows:
-            row = await session.get(MessageBuffer, m.row_id)
-            if row is not None:
-                row.processed = True
-        await session.commit()
+    await mark_consumed(m.row_id for m in rows)
 
 
 async def _advance_cursor(channel_jid: str, last_message_id: str) -> None:
@@ -266,8 +237,7 @@ async def run_batch(
     if messages is None:
         return None
 
-    async with get_session() as session:
-        channel = await session.scalar(select(Channel).where(Channel.jid == channel_jid))
+    channel = await get_channel(channel_jid)
     if channel is None:
         return None
 
@@ -491,8 +461,7 @@ async def interpret_text_approval(reply_text: str, decision_client: DecisionMode
 
 
 async def handle_chat_message(
-    payload: dict,
-    channel_jid: str,
+    message: InboundMessage,
     vault: VaultClient,
     decision_client: DecisionModelProtocol,
     worker_client: TextModelClient,
@@ -500,18 +469,17 @@ async def handle_chat_message(
     """Deterministic trigger (mention or reply-to-bot) -> identify thread
     -> read-only answer or Proposal for a write. Returns the reply text
     sent, or None if the message wasn't addressed to the bot."""
-    fields = _extract_message(payload)
-    text = fields["text"]
-    message_id = fields["id"]
-    quoted_id = fields["replied_to_id"]
+    text = message.text
+    message_id = message.message_id
+    quoted_id = message.replied_to_id
+    channel_jid = message.channel
 
     mentioned = is_bot_mention(text)
     replying_to_bot = await is_reply_to_bot(quoted_id)
     if not mentioned and not replying_to_bot:
         return None
 
-    async with get_session() as session:
-        channel = await session.scalar(select(Channel).where(Channel.jid == channel_jid))
+    channel = await get_channel(channel_jid)
     if channel is None:
         return None
 

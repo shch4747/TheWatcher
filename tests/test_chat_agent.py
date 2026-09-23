@@ -20,7 +20,7 @@ from shared.wiki.interface import LocalDirClient, parse_page
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
-from tests.gowa_payloads import message_event
+from tests.gowa_payloads import inbound
 
 CHANNEL_JID = "chat-agent-chan@g.us"
 
@@ -72,13 +72,13 @@ THREAD_PAGE = (
 )
 
 
-def _message_payload(text: str, message_id: str, replied_to: str | None = None) -> dict:
-    return message_event(message_id, CHANNEL_JID, text, sender="member@x", replied_to_id=replied_to)
+def _message(text: str, message_id: str, replied_to: str | None = None):
+    return inbound(message_id, CHANNEL_JID, text, replied_to_id=replied_to)
 
 
 async def test_non_addressed_message_is_ignored(vault: LocalDirClient):
     reply = await wa_agent.handle_chat_message(
-        _message_payload("just chatting", "m1"), CHANNEL_JID, vault, FixtureDecisionModel(), EchoWorker()
+        _message("just chatting", "m1"), vault, FixtureDecisionModel(), EchoWorker()
     )
     assert reply is None
 
@@ -87,10 +87,8 @@ async def test_mention_with_question_answers_from_thread_and_quotes(vault: Local
     channel_dir = await _seed_channel()
     await vault.create(f"channels/{channel_dir}/hall-booking.md", THREAD_PAGE)
 
-    payload = _message_payload("@watcher who owns the hall booking?", "q1")
-    reply = await wa_agent.handle_chat_message(
-        payload, CHANNEL_JID, vault, FixtureDecisionModel(), EchoWorker()
-    )
+    message = _message("@watcher who owns the hall booking?", "q1")
+    reply = await wa_agent.handle_chat_message(message, vault, FixtureDecisionModel(), EchoWorker())
 
     assert reply == "Aira owns the hall booking."
     sent = fake_gowa_app.state.sent_messages[-1]
@@ -106,12 +104,8 @@ async def test_reply_to_bot_message_also_triggers(vault: LocalDirClient):
         session.add(OutboundLog(channel="reply-trigger-chan@g.us", text="watching", message_id="bot-msg-1"))
         await session.commit()
 
-    payload = message_event(
-        "q2", "reply-trigger-chan@g.us", "and when is it due?", sender="member@x", replied_to_id="bot-msg-1"
-    )
-    reply = await wa_agent.handle_chat_message(
-        payload, "reply-trigger-chan@g.us", vault, FixtureDecisionModel(), EchoWorker()
-    )
+    message = inbound("q2", "reply-trigger-chan@g.us", "and when is it due?", replied_to_id="bot-msg-1")
+    reply = await wa_agent.handle_chat_message(message, vault, FixtureDecisionModel(), EchoWorker())
     assert reply is not None
 
 
@@ -122,14 +116,10 @@ async def test_write_request_produces_a_proposal_not_a_direct_write(vault: Local
     )
     await vault.create(f"channels/{channel_dir}/demo-date.md", thread_page)
 
-    payload = message_event(
-        "w1", "write-req-chan@g.us", "@watcher note the demo moved to Friday", sender="member@x"
-    )
+    message = inbound("w1", "write-req-chan@g.us", "@watcher note the demo moved to Friday")
 
     before = (await vault.read(f"channels/{channel_dir}/demo-date.md")).content
-    reply = await wa_agent.handle_chat_message(
-        payload, "write-req-chan@g.us", vault, FixtureDecisionModel(), EchoWorker()
-    )
+    reply = await wa_agent.handle_chat_message(message, vault, FixtureDecisionModel(), EchoWorker())
     after = (await vault.read(f"channels/{channel_dir}/demo-date.md")).content
 
     assert "confirm" in reply.lower() or "👍" in reply

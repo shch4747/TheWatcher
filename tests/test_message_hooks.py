@@ -53,8 +53,8 @@ async def _allowlist(jid: str) -> None:
 async def test_hook_fires_for_regular_message(client: httpx.AsyncClient):
     seen = []
 
-    async def hook(payload: dict, channel: str) -> None:
-        seen.append((payload["payload"]["body"], channel))
+    async def hook(message: gateway.InboundMessage) -> None:
+        seen.append((message.text, message.channel))
 
     gateway.register_message_hook(hook)
     await _allowlist("hook-chan-1@g.us")
@@ -69,8 +69,8 @@ async def test_hook_fires_for_regular_message(client: httpx.AsyncClient):
 async def test_hook_does_not_fire_for_admin_command(client: httpx.AsyncClient):
     seen = []
 
-    async def hook(payload: dict, channel: str) -> None:
-        seen.append(payload)
+    async def hook(message: gateway.InboundMessage) -> None:
+        seen.append(message)
 
     gateway.register_message_hook(hook)
     async with get_session() as session:
@@ -89,8 +89,8 @@ async def test_hook_does_not_fire_for_admin_command(client: httpx.AsyncClient):
 async def test_hook_does_not_fire_for_duplicate_message(client: httpx.AsyncClient):
     seen = []
 
-    async def hook(payload: dict, channel: str) -> None:
-        seen.append(payload)
+    async def hook(message: gateway.InboundMessage) -> None:
+        seen.append(message)
 
     gateway.register_message_hook(hook)
     await _allowlist("hook-chan-dup@g.us")
@@ -105,7 +105,7 @@ async def test_hook_does_not_fire_for_duplicate_message(client: httpx.AsyncClien
 
 
 async def test_broken_hook_does_not_break_webhook_intake(client: httpx.AsyncClient):
-    async def broken_hook(payload: dict, channel: str) -> None:
+    async def broken_hook(message: gateway.InboundMessage) -> None:
         raise RuntimeError("boom")
 
     gateway.register_message_hook(broken_hook)

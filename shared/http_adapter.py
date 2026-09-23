@@ -38,12 +38,13 @@ async def http_get_message(message_id: str) -> dict:
     message = await get_message(message_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
-    return message
+    return message.model_dump(mode="json")
 
 
 @router.get("/gateway/channels/{channel_jid}/messages")
 async def http_get_messages(channel_jid: str, since_id: str | None = None, limit: int = 100) -> list[dict]:
-    return await get_messages(channel_jid, since_id=since_id, limit=limit)
+    messages = await get_messages(channel_jid, since_id=since_id, limit=limit)
+    return [m.model_dump(mode="json") for m in messages]
 
 
 class ChannelResponse(BaseModel):
