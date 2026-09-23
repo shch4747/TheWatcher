@@ -55,8 +55,9 @@ async def test_check_and_mark_stale_flips_old_active_thread(vault: LocalDirClien
     await vault.create(
         "channels/proj/fresh-thread.md", _thread_page("fresh-thread", "active", recent))
 
-    marked = await wa_agent.check_and_mark_stale(vault, "proj", now=now)
-    assert marked == ["old-thread"]
+    channel = Channel(jid="proj@g.us", kind="project", title="Proj")
+    moved = await wa_agent.run_lifecycle_for_channel(vault, channel, now=now)
+    assert moved == {"stale": ["old-thread"], "archived": []}
 
     old_page = parse_page((await vault.read("channels/proj/old-thread.md")).content)
     fresh_page = parse_page((await vault.read("channels/proj/fresh-thread.md")).content)
@@ -113,8 +114,9 @@ async def test_archive_ended_threads_moves_file(vault: LocalDirClient):
     await vault.create(
         "channels/proj2/ended-thread.md", _thread_page("ended-thread", "ended", ended_at))
 
-    archived = await wa_agent.archive_ended_threads(vault, "proj2")
-    assert archived == ["ended-thread"]
+    channel = Channel(jid="proj2@g.us", kind="project", title="Proj2")
+    moved = await wa_agent.run_lifecycle_for_channel(vault, channel)
+    assert moved["archived"] == ["ended-thread"]
 
     with pytest.raises(PageNotFound):
         await vault.read("channels/proj2/ended-thread.md")

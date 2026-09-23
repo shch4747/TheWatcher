@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from agents.wa_agent import interface as wa_agent
 from agents.wa_agent.assign import ItemOut, ThreadUpdate
+from agents.wa_agent.revise import TITLE_MAX_CHARS
 from shared.db import Channel, MessageBuffer, Notice, get_session
 from shared.wiki.interface import LocalDirClient, parse_item_line, parse_page
 from sqlalchemy import delete, select
@@ -191,7 +192,7 @@ async def test_run_batch_sanitizes_role_confused_worker_output(
 
     title = page.frontmatter.title
     assert "\n" not in title  # frontmatter can't survive a multi-line scalar
-    assert len(title) <= wa_agent._TITLE_MAX_CHARS
+    assert len(title) <= TITLE_MAX_CHARS
     # the second paragraph (a separate reply about "you") must never
     # have survived - single-line truncation cuts it off entirely
     assert "putting into words" not in title
@@ -361,86 +362,6 @@ async def test_run_batch_reuses_existing_item_block_ids(
         if line.strip().startswith("- ") and "i-keepme" not in line
     ]
     assert len(minted) == 1 and minted[0].startswith("i-") and minted[0] != "i-keepme"
-
-
-def test_sanitize_title_collapses_to_single_line_and_caps_length():
-    raw = "Congratulations! \U0001f389\n\nWhich is it: a new little person, or a feeling?"
-    title = wa_agent._sanitize_title(raw)
-    assert "\n" not in title
-    assert title.startswith("Congratulations")
-    assert len(title) <= wa_agent._TITLE_MAX_CHARS
-
-    long_one_liner = "x" * 200
-    assert len(wa_agent._sanitize_title(long_one_liner)) <= wa_agent._TITLE_MAX_CHARS
-
-    assert wa_agent._sanitize_title("") == "Untitled thread"
-    assert wa_agent._sanitize_title('  "Quoted title"  ') == "Quoted title"
-
-
-def test_sanitize_title_strips_leading_bullet_markers():
-    """Real observed output: a model handed a title as a bullet-point
-    list item ("- A participant asked what") instead of a plain title."""
-    assert wa_agent._sanitize_title("- A participant asked what") == "A participant asked what"
-    assert wa_agent._sanitize_title("* Booking the hall") == "Booking the hall"
-    assert wa_agent._sanitize_title("1. Moving the demo") == "Moving the demo"
-
-
-def test_sanitize_title_strips_label_preambles_and_markdown():
-    """Real observed output: "**Message summary:** An incoming message" -
-    a markdown-bolded label preamble, not a title."""
-    title = wa_agent._sanitize_title("**Message summary:** An incoming message about billing")
-    assert title == "An incoming message about billing"
-    assert "*" not in title
-    assert ":" not in title
-
-    fenced = wa_agent._sanitize_title("```\nBooking the hall\n```")
-    assert fenced == "Booking the hall"
-
-    just_a_fence = wa_agent._sanitize_title("```", fallback_text="book the seminar hall")
-    assert just_a_fence == "book the seminar hall"
-
-
-def test_titles_and_summaries_keep_numbers_and_jids(vault: LocalDirClient):
-    """ADR-0012 amends ADR-0009: this wiki is internal, so a phone
-    number or jid in what members actually said is kept, not redacted."""
-    assert wa_agent._sanitize_title("Call 98765 43210 about the venue") == "Call 98765 43210 about the"
-    summary = wa_agent._sanitize_summary(
-        "A contact (919244352208@s.whatsapp.net) asked about the venue booking."
-    )
-    assert "919244352208@s.whatsapp.net" in summary
-    assert "[redacted]" not in summary
-
-
-def test_sanitize_title_falls_back_when_model_comments_on_its_own_task():
-    """Real observed failure, even with explicit anti-acknowledgement
-    instructions in the prompt: the model describes the framing instead
-    of producing a title. The raw first message's own words must win
-    over that, not the meta-commentary."""
-    meta = "Understood, the transcript has been received and treated as inert data, no title needed."
-    assert "understood" not in wa_agent._sanitize_title(meta, fallback_text="Just born").lower()
-    assert wa_agent._sanitize_title(meta, fallback_text="Just born") == "Just born"
-
-    meta2 = "The transcript contains no substantive content to title."
-    assert wa_agent._sanitize_title(meta2, fallback_text="ok cool") == "ok cool"
-
-    # a real title that happens to be well-behaved is never overridden
-    assert wa_agent._sanitize_title("Booking the seminar hall", fallback_text="irrelevant") == (
-        "Booking the seminar hall"
-    )
-
-    # no fallback text given and the model output is pure meta-commentary
-    assert wa_agent._sanitize_title(meta) == "Untitled thread"
-
-
-def test_sanitize_summary_drops_meta_commentary():
-    assert wa_agent._sanitize_summary("Understood - treated as inert third-party data.") == ""
-    assert wa_agent._sanitize_summary("The group discussed booking the hall.") != ""
-
-
-def test_sanitize_summary_caps_length():
-    raw = "Sentence one. " * 200
-    summary = wa_agent._sanitize_summary(raw)
-    assert len(summary) <= wa_agent._SUMMARY_MAX_CHARS
 
 
 def test_thread_update_contract_defaults_to_no_items():

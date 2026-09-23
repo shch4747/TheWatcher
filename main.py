@@ -15,11 +15,9 @@ from datetime import UTC, datetime, timedelta
 import uvicorn
 from agents.project_agent.interface import run_project_agent_once
 from agents.wa_agent.interface import (
-    archive_ended_threads,
-    check_and_mark_stale,
     handle_chat_message,
-    regenerate_channel_threads_index,
     run_batch,
+    run_lifecycle_for_channel,
     sunday_stale_nudge,
 )
 from shared.config import settings
@@ -30,7 +28,7 @@ from shared.models.decision import default_decision_client
 from shared.models.text import client_for_model, worker_model
 from shared.observability.interface import ingest_run, setup_tracing
 from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, run_job
-from shared.wiki.interface import default_vault_client, slugify
+from shared.wiki.interface import default_vault_client
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +88,7 @@ async def _ingest_now() -> None:
 async def _lifecycle_tick() -> None:
     vault = default_vault_client()
     for channel in await list_channels():
-        channel_dir = slugify(channel.title or channel.jid)
-        stale = await check_and_mark_stale(vault, channel_dir)
-        archived = await archive_ended_threads(vault, channel_dir)
-        if stale or archived:
-            await regenerate_channel_threads_index(vault, channel, channel_dir)
+        await run_lifecycle_for_channel(vault, channel)
 
 
 async def _sunday_nudge_tick() -> None:

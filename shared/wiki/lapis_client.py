@@ -94,7 +94,9 @@ class VaultClient(Protocol):
 
 def _require_base_revision(path: str, base_revision: str) -> None:
     if not base_revision:
-        raise ValueError(f"write({path!r}) needs the base_revision it was read at - use create() for a new page")
+        raise ValueError(
+            f"write({path!r}) needs the base_revision it was read at - use create() for a new page"
+        )
 
 
 async def read_if_exists(vault: VaultClient, path: str) -> ReadResult | None:
@@ -341,7 +343,8 @@ class LapisClient:
         paths: list[str] = []
         offset = 0
         while True:
-            data = await self._call_tool("find", {"pattern": pattern, "limit": _FIND_PAGE_SIZE, "offset": offset})
+            arguments = {"pattern": pattern, "limit": _FIND_PAGE_SIZE, "offset": offset}
+            data = await self._call_tool("find", arguments)
             page = data.get("paths", [])
             paths += page
             if not data.get("truncated") or not page:

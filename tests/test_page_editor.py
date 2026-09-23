@@ -89,20 +89,20 @@ def test_unknown_sections_are_refused():
 
 
 def test_set_fenced_keeps_human_text_outside_the_fence():
-    text = (FIXTURES / "project_watcher.md").read_text().replace(
-        "## Status\n<!-- watcher:managed -->", "## Status\nHuman caveat above.\n<!-- watcher:managed -->"
-    ).replace("first send() path.\n<!-- /watcher -->", "first send() path.\n<!-- /watcher -->\nHuman footnote.")
+    text = (FIXTURES / "project_watcher.md").read_text()
+    text = text.replace("## Status\n<!--", "## Status\nHuman caveat above.\n<!--")
+    text = text.replace("send() path.\n<!-- /watcher -->", "send() path.\n<!-- /watcher -->\nHuman footnote.")
     page = set_fenced(parse_page(text), "Status", "Phase 1 shipped.")
-    body = page.section("Status").body
-    assert body == (
-        "Human caveat above.\n<!-- watcher:managed -->\nPhase 1 shipped.\n<!-- /watcher -->\nHuman footnote.\n"
+    assert page.section("Status").body == (
+        "Human caveat above.\n<!-- watcher:managed -->\nPhase 1 shipped.\n"
+        "<!-- /watcher -->\nHuman footnote.\n"
     )
 
 
 def test_a_deleted_fence_is_restored_after_the_human_text():
+    status = fenced_content(_project(), "Status")
     text = (FIXTURES / "project_watcher.md").read_text().replace(
-        "<!-- watcher:managed -->\nPhase 0 shipped: gowa webhook intake, SQLite buffer, first send() path.\n<!-- /watcher -->",
-        "A human rewrote this by hand.",
+        f"<!-- watcher:managed -->\n{status}\n<!-- /watcher -->", "A human rewrote this by hand."
     )
     page = set_fenced(parse_page(text), "Status", "Agent status.")
     assert page.section("Status").body.startswith("A human rewrote this by hand.\n<!-- watcher:managed -->")
@@ -197,7 +197,9 @@ def test_set_field_keeps_the_frontmatter_model_current():
     assert updated.frontmatter.message_ids == ["1", "2"]
 
 
-@pytest.mark.parametrize("title", ["Friday: the demo", "123", "2026-09-24", "multi\nline\n\ntitle", 'quote " and #'])
+@pytest.mark.parametrize(
+    "title", ["Friday: the demo", "123", "2026-09-24", "multi\nline\n\ntitle", 'quote " and #']
+)
 def test_set_title_writes_any_text_safely(title):
     page = set_title(_project(), title)
     reparsed = parse_page(dump_page(page))
