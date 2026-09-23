@@ -27,6 +27,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+# httpx2, not httpx: it's what the locked mcp (2.x) is built on - its
+# streamable_http_client takes an `httpx2.AsyncClient` and handles
+# transport failures as `httpx2.StreamError`. An `httpx` client happens
+# to work on the happy path but its errors bypass that handling. It
+# arrives as mcp's dependency, so `uv sync` installs it.
 import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client

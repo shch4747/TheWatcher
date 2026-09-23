@@ -90,7 +90,7 @@ there and *sent* by `main.py` (ADR-0013).
 - `agents/wa_agent` and `agents/project_agent` never import each other;
   both go through `shared/*` interfaces for everything (identity,
   wiki I/O, models, scheduling).
-- `agents/innovation-agent` and `agents/research-agent` are frozen
+- `agents/innovation_agent` and `agents/research_agent` are frozen
   (ADR-0010) and have zero import relationship with anything above -
   they predate this architecture entirely.
 

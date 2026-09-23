@@ -35,7 +35,7 @@ dev = [
 line-length = 110
 src = ["shared", "agents", "tests"]
 # Frozen per ADR-0010 — not ours to fix up as a side effect of v1 work.
-extend-exclude = ["agents/innovation-agent", "agents/research-agent"]
+extend-exclude = ["agents/innovation_agent", "agents/research_agent"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

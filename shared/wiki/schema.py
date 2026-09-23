@@ -49,6 +49,8 @@ class ProjectFrontmatter(Frontmatter):
     kanban: str | None = None
     health: float | None = None
     health_updated: date_type | None = None
+    technologies: list[str] = []
+    cause: str | None = None
 
 
 class EventFrontmatter(Frontmatter):
@@ -96,6 +98,17 @@ class ResourceFrontmatter(Frontmatter):
     added_by: str | None = None
 
 
+class IdeaFrontmatter(Frontmatter):
+    type: Literal["idea"] = "idea"
+    lane: Literal["remedial", "bridged", "frontier", "event"]
+    trigger: list[str] = []
+    verdict: Literal["up", "down", "neutral"] | None = None
+    reason: str | None = None
+    reviewer: str | None = None
+    reviewed_at: datetime | None = None
+    published_at: datetime | None = None
+
+
 class InboxFrontmatter(Frontmatter):
     """An agent's Inbox (`inbox/<agent>.md`) - the source of truth for
     what that agent still has to look at (ADR-0014)."""
@@ -111,6 +124,7 @@ SCHEMA_BY_TYPE: dict[str, type[Frontmatter]] = {
     "channel": ChannelFrontmatter,
     "thread": ThreadFrontmatter,
     "resource": ResourceFrontmatter,
+    "idea": IdeaFrontmatter,
     "inbox": InboxFrontmatter,
 }
 
@@ -161,6 +175,15 @@ SECTION_OWNERS: dict[str, dict[str, Owner]] = {
     "resource": {
         "Summary": "managed",
         "Notes": "human",
+    },
+    "idea": {
+        "Statement": "managed",
+        "Why now": "managed",
+        "Evidence": "managed",
+        "Existing leverage": "managed",
+        "Skill match": "managed",
+        "Risks": "managed",
+        "Notes": "shared",
     },
     # Pending and Done are rewritten by shared/inbox only; a human may
     # still add a line to Pending by hand and it is picked up (ADR-0014).

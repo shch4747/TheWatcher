@@ -21,6 +21,7 @@ from shared.wiki.interface import (
     parse_page,
     render_new_channel_page,
     render_new_event_page,
+    render_new_idea_page,
     render_new_member_page,
     render_new_project_page,
     render_new_thread_page,
@@ -56,7 +57,15 @@ def _all_new_pages():
             slug="t", title="T", channel_title="Watcher", initiative=None, summary="s",
             items_text="", timeline_lines=["- a [src:: 1]"], participants=["Aira"], message_ids=["1"],
         ),
+        render_new_idea_page(
+            title="Harness", lane="remedial", statement="s", why_now="w", evidence=[], existing_leverage=[],
+            skill_match_present=[], skill_match_missing=[], risks=["r"], trigger=["projects/a"],
+        ),
     ]
+
+
+def _new_thread():
+    return next(p for p in map(parse_page, _all_new_pages()) if p.page_type == "thread")
 
 
 def _outside_fences(page) -> dict[str, str]:
@@ -185,14 +194,14 @@ def test_upsert_items_replaces_by_block_id_and_keeps_prose():
 
 
 def test_set_field_validates_against_the_schema():
-    thread = parse_page(_all_new_pages()[-1])
+    thread = _new_thread()
     assert set_field(thread, "state", "stale").frontmatter.state == "stale"
     with pytest.raises(InvalidPageEdit):
         set_field(thread, "state", "finished")
 
 
 def test_set_field_keeps_the_frontmatter_model_current():
-    thread = parse_page(_all_new_pages()[-1])
+    thread = _new_thread()
     updated = set_field(thread, "message_ids", ["1", "2"])
     assert updated.frontmatter.message_ids == ["1", "2"]
 

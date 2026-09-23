@@ -9,7 +9,7 @@ This is the v1 application described in `docs/Spec - Watcher v1.md` and
 - `agents/wa_agent/` and `agents/project_agent/` — the two agents in v1
   scope, each its own package with its own `interface.py`, owned
   independently.
-- `agents/innovation-agent/` and `agents/research-agent/` — **frozen** for
+- `agents/innovation_agent/` and `agents/research_agent/` — **frozen** for
   the duration of v1. See
   [ADR-0010](docs/adr/0010-freeze-innovation-research-for-v1.md). No
   refactors, no new features, no dependency changes — mechanical

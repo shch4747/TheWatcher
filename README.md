@@ -10,7 +10,7 @@ for the phase-by-phase build, and [`docs/Architecture.md`](docs/Architecture.md)
 for a diagram of how the pieces talk to each other.
 
 This is the v1 build (Phases 0-6 of the Plan, all landed). Two earlier
-prototypes - `agents/innovation-agent/` and `agents/research-agent/` -
+prototypes - `agents/innovation_agent/` and `agents/research_agent/` -
 predate this design and are **frozen** until v1 ships; see
 [ADR-0010](docs/adr/0010-freeze-innovation-research-for-v1.md).
 
@@ -30,8 +30,8 @@ shared/            cross-cutting packages every agent depends on
 agents/
   wa_agent/        batch cutting, thread assignment + revision, lifecycle, Chat Agent, Proposals
   project_agent/   Item upsert into initiative pages, Status rewrite
-  innovation-agent/  FROZEN - see ADR-0010
-  research-agent/    FROZEN - see ADR-0010
+  innovation_agent/  FROZEN - see ADR-0010
+  research_agent/    FROZEN - see ADR-0010
 skills/            SKILL.md prompt bundles (Chat Agent + benchmark; ingestion
                    prompts are code constants, see ADR-0012)
 tests/             pytest suite; tests/fake_gowa/ is the Seam-1 test double
@@ -134,7 +134,7 @@ once you've read the outputs yourself.
 
 ## Frozen prototypes
 
-`agents/innovation-agent/` (idea generation) and `agents/research-agent/`
+`agents/innovation_agent/` (idea generation) and `agents/research_agent/`
 (arXiv/HN/HF digests) are real, working pre-pivot prototypes - not
 scratch code - kept for a post-v1 decision on whether to resume them.
 Don't extend or "clean up" either as a side effect of v1 work; see

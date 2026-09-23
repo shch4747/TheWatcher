@@ -9,6 +9,7 @@ import re
 from datetime import UTC, date, datetime
 
 from shared.wiki.editor import new_page_sections, yaml_str
+from shared.wiki.items import Item, format_item_line
 
 SLUG_MAX_LEN = 80
 
@@ -129,3 +130,58 @@ def render_new_channel_page(
         "---\n"
         f"# {title}\n"
     ) + new_page_sections("channel")
+
+
+def _wikilink(target: str) -> str:
+    return target if target.startswith("[[") else f"[[{target}]]"
+
+
+def _bullets(lines: list[str]) -> str:
+    return "\n".join(f"- {line}" for line in lines)
+
+
+def render_new_idea_page(
+    title: str,
+    lane: str,
+    statement: str,
+    why_now: str,
+    evidence: list[Item],
+    existing_leverage: list[str],
+    skill_match_present: list[str],
+    skill_match_missing: list[str],
+    risks: list[str],
+    trigger: list[str],
+    slug: str | None = None,
+) -> str:
+    """Wiki Format §idea: an Innovation Agent pitch. `verdict`, `reason`,
+    `reviewer` and `reviewed_at` start empty - they're the human's to set."""
+    slug = slug or slugify(title)
+    triggers = ", ".join(yaml_str(_wikilink(t)) for t in trigger)
+    skill_match = _bullets(
+        [f"Present: {s}" for s in skill_match_present] + [f"Missing: {s}" for s in skill_match_missing]
+    )
+    return (
+        "---\n"
+        "type: idea\n"
+        f"slug: {slug}\n"
+        f"title: {yaml_str(title)}\n"
+        f"lane: {lane}\n"
+        f"trigger: [{triggers}]\n"
+        "verdict:\n"
+        "reason:\n"
+        "reviewer:\n"
+        "reviewed_at:\n"
+        f"published_at: {datetime.now(UTC).isoformat()}\n"
+        "---\n"
+        f"# {title}\n"
+    ) + new_page_sections(
+        "idea",
+        {
+            "Statement": statement,
+            "Why now": why_now,
+            "Evidence": "\n".join(format_item_line(item) for item in evidence),
+            "Existing leverage": _bullets(existing_leverage),
+            "Skill match": skill_match,
+            "Risks": _bullets(risks),
+        },
+    )

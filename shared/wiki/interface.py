@@ -67,6 +67,7 @@ from shared.wiki.schema import SCHEMA_BY_TYPE, Frontmatter, canonical_section_ti
 from shared.wiki.templates import (
     render_new_channel_page,
     render_new_event_page,
+    render_new_idea_page,
     render_new_member_page,
     render_new_project_page,
     render_new_thread_page,
@@ -140,6 +141,7 @@ __all__ = [
     "upsert_items",
     "render_new_channel_page",
     "render_new_event_page",
+    "render_new_idea_page",
     "render_new_member_page",
     "render_new_project_page",
     "render_new_thread_page",
