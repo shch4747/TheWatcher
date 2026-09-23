@@ -190,7 +190,7 @@ class LapisClient:
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         arguments = {"vault": self.vault_id, **arguments}
-        async with httpx2.AsyncClient(timeout=30, headers=headers) as http_client:
+        async with httpx.AsyncClient(timeout=30, headers=headers) as http_client:
             async with streamable_http_client(
                 f"{self.base_url}/api/mcp", http_client=http_client
             ) as (read_stream, write_stream):
