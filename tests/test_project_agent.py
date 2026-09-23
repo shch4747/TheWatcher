@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 from agents.project_agent import interface as project_agent
-from shared.db import Channel, Notice, get_session
+from shared.db import Channel, get_session
+from shared.inbox.interface import THREAD_UPDATE, Inbox, InboxPost
 from shared.models.text import TextModelClient
 from shared.wiki.interface import LocalDirClient, parse_page
 
@@ -144,31 +145,38 @@ async def test_rewrite_status_replaces_managed_section(vault: LocalDirClient):
     assert "old status" not in page.section("Status").body
 
 
-async def test_consume_inbox_marks_notices_consumed():
+async def test_applying_the_same_thread_twice_changes_nothing(vault: LocalDirClient):
+    """Regression: every notice re-appended every past decision, resource
+    and question. Items carry block ids; a second apply is a no-op."""
+    await vault.create("channels/x/t1.md", THREAD_WITH_ITEMS)
+    await vault.create("projects/watcher.md", INITIATIVE_PAGE)
+
+    await project_agent.apply_thread_items_to_initiative(vault, "channels/x/t1.md", "projects/watcher.md")
+    once = (await vault.read("projects/watcher.md")).content
+    again = await project_agent.apply_thread_items_to_initiative(
+        vault, "channels/x/t1.md", "projects/watcher.md"
+    )
+    assert (await vault.read("projects/watcher.md")).content == once
+    assert (again.decisions_appended, again.resources_appended, again.log_lines_appended) == (0, 0, 0)
+
+
+async def _seed_e2e(vault: LocalDirClient, jid: str, name: str) -> None:
     async with get_session() as session:
-        session.add(Notice(agent="project_agent", channel="pa-chan@g.us", thread_slug="t1"))
+        session.add(Channel(jid=jid, kind="project", title=name, initiative=name))
         await session.commit()
-
-    first = await project_agent.consume_inbox()
-    assert any(n.channel == "pa-chan@g.us" for n in first)
-
-    second = await project_agent.consume_inbox()
-    assert all(n.channel != "pa-chan@g.us" for n in second)
+    slug = name.lower()
+    initiative_page = INITIATIVE_PAGE.replace("slug: watcher", f"slug: {slug}").replace(
+        "title: Watcher", f"title: {name}"
+    )
+    await vault.create(f"projects/{slug}.md", initiative_page)
+    await vault.create(f"channels/{slug}/t1.md", THREAD_WITH_ITEMS)
+    await Inbox(vault, "project_agent").post(
+        InboxPost(kind=THREAD_UPDATE, text="Thread update: T1", channel=jid, thread_slug="t1")
+    )
 
 
 async def test_run_project_agent_once_end_to_end(vault: LocalDirClient):
-    async with get_session() as session:
-        session.add(
-            Channel(jid="pa-e2e-chan@g.us", kind="project", title="PaE2e", initiative="PaE2e")
-        )
-        session.add(Notice(agent="project_agent", channel="pa-e2e-chan@g.us", thread_slug="t1"))
-        await session.commit()
-
-    initiative_page = INITIATIVE_PAGE.replace("slug: watcher", "slug: pae2e").replace(
-        "title: Watcher", "title: PaE2e"
-    )
-    await vault.create("projects/pae2e.md", initiative_page)
-    await vault.create("channels/pae2e/t1.md", THREAD_WITH_ITEMS)
+    await _seed_e2e(vault, "pa-e2e-chan@g.us", "PaE2e")
 
     results = await project_agent.run_project_agent_once(vault, ScriptedWorker())
     assert len(results) == 1
@@ -177,3 +185,18 @@ async def test_run_project_agent_once_end_to_end(vault: LocalDirClient):
     page = parse_page((await vault.read("projects/pae2e.md")).content)
     assert "Book the hall" in page.section("Open tasks").body
     assert "New status text." in page.section("Status").body
+    assert await Inbox(vault, "project_agent").pending() == []
+
+
+async def test_a_failed_apply_stays_in_the_inbox_and_is_retried(vault: LocalDirClient):
+    await _seed_e2e(vault, "pa-retry-chan@g.us", "PaRetry")
+
+    class Broken(ScriptedWorker):
+        async def generate(self, prompt, system=None):  # type: ignore[override]
+            raise RuntimeError("provider down")
+
+    assert await project_agent.run_project_agent_once(vault, Broken()) == []
+    assert len(await Inbox(vault, "project_agent").pending()) == 1
+
+    assert len(await project_agent.run_project_agent_once(vault, ScriptedWorker())) == 1
+    assert await Inbox(vault, "project_agent").pending() == []

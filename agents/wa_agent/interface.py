@@ -8,12 +8,13 @@ packages through *their* interfaces.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from shared.config import settings
-from shared.db import Channel, Notice, OutboundLog, get_session
+from shared.db import Channel, OutboundLog, get_session
 from shared.gateway.interface import (
     InboundMessage,
     get_channel,
@@ -26,6 +27,7 @@ from shared.gateway.interface import (
     resolve_sender,
 )
 from shared.gateway.interface import send as gateway_send
+from shared.inbox.interface import THREAD_UPDATE, Inbox, InboxPost
 from shared.models.decision import DecisionModelProtocol
 from shared.models.interface import decide_with_fallback, generate
 from shared.models.text import TextModelClient
@@ -35,6 +37,8 @@ from sqlalchemy import select
 from agents.wa_agent.assign import CHATTER, NEW_THREAD, SenderNames, assign_batch
 from agents.wa_agent.messages import BufferedMessage, ThreadInfo
 from agents.wa_agent.revise import ThreadRevision, revise_thread
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BufferedMessage",
@@ -203,19 +207,38 @@ async def _advance_cursor(channel_jid: str, last_message_id: str) -> None:
             await session.commit()
 
 
-async def _post_notice(channel: Channel, thread_slug: str, since_message_id: str | None) -> None:
-    if channel.kind not in ("project", "event") or not channel.initiative:
+def _inbox_for(channel: Channel) -> str | None:
+    """Whose Inbox hears about this Channel's Threads (Spec: the
+    initiative's agent - the Project Agent for project/event Channels,
+    nobody else in v1)."""
+    if channel.kind in ("project", "event") and channel.initiative:
+        return "project_agent"
+    return None
+
+
+def _update_notice(channel: Channel, thread: StoredThread, since: str) -> InboxPost:
+    return InboxPost(
+        kind=THREAD_UPDATE,
+        text=f"Thread update: {thread.title}",
+        channel=channel.jid,
+        thread_slug=thread.slug,
+        thread_link=thread.path.removesuffix(".md"),
+        since=since,
+    )
+
+
+async def _post_notices(vault: VaultClient, channel: Channel, notices: list[InboxPost]) -> None:
+    """After the batch is committed: a notice that can't be posted is
+    reported, not raised - raising would re-run a batch whose Thread
+    pages were already written."""
+    agent = _inbox_for(channel)
+    if agent is None or not notices:
         return
-    async with get_session() as session:
-        session.add(
-            Notice(
-                agent="project_agent",
-                channel=channel.jid,
-                thread_slug=thread_slug,
-                since_message_id=since_message_id,
-            )
-        )
-        await session.commit()
+    try:
+        await Inbox(vault, agent).post(*notices)
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.exception("could not post %d update notice(s) to %s", len(notices), agent)
+        await notify_logs(f"⚠️ ingest: couldn't post update notices to {agent}'s inbox: {exc}")
 
 
 async def run_batch(
@@ -284,6 +307,7 @@ async def run_batch(
         unassigned=assignment.unassigned,
     )
 
+    notices: list[InboxPost] = []
     for key, bucket in assignment.buckets.items():
         if key == CHATTER:
             result.chatter_count += len(bucket)
@@ -322,13 +346,14 @@ async def run_batch(
             if revived:
                 result.threads_revived.append(thread.slug)
         result.model_calls += 1
-        await _post_notice(channel, thread.slug, bucket[-1].message_id)
+        notices.append(_update_notice(channel, thread, bucket[0].message_id))
 
     if result.threads_created or result.threads_updated:
         await store.reindex()
 
     await _mark_processed(messages)
     await _advance_cursor(channel_jid, messages[-1].message_id)
+    await _post_notices(vault, channel, notices)
     return result
 
 

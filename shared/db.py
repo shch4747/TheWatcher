@@ -195,22 +195,6 @@ class ModelCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
 
 
-class Notice(Base):
-    """Update Notice posted to an agent's Inbox (Spec: "Update Notices
-    posted to the Inbox of the initiative's agent"). `inbox/<agent>.md`
-    is a derived, read-only rendering of these rows."""
-
-    __tablename__ = "notices"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    agent: Mapped[str] = mapped_column(String, index=True)
-    channel: Mapped[str] = mapped_column(String)
-    thread_slug: Mapped[str] = mapped_column(String)
-    since_message_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
 _engine = create_async_engine(settings.database_url)
 async_session = async_sessionmaker(_engine, expire_on_commit=False)
 

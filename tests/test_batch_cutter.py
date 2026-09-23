@@ -14,7 +14,8 @@ import pytest
 from agents.wa_agent import interface as wa_agent
 from agents.wa_agent.assign import ItemOut, ThreadUpdate
 from agents.wa_agent.revise import TITLE_MAX_CHARS
-from shared.db import Channel, MessageBuffer, Notice, get_session
+from shared.db import Channel, MessageBuffer, get_session
+from shared.inbox.interface import Inbox
 from shared.wiki.interface import LocalDirClient, parse_item_line, parse_page
 from sqlalchemy import delete, select
 
@@ -154,11 +155,13 @@ async def test_run_batch_creates_new_thread_with_summary_items_timeline(
     async with get_session() as session:
         row = await session.scalar(select(MessageBuffer).where(MessageBuffer.message_id == message_id))
         channel = await session.scalar(select(Channel).where(Channel.jid == CHANNEL_JID))
-        notice = await session.scalar(select(Notice).where(Notice.channel == CHANNEL_JID))
     assert row.processed is True
     assert channel.cursor == message_id
-    assert notice is not None
-    assert notice.agent == "project_agent"
+
+    [notice] = [i for i in await Inbox(vault, "project_agent").pending() if i.channel == CHANNEL_JID]
+    assert notice.kind == "thread_update"
+    assert notice.thread_slug == slug
+    assert notice.since == message_id
 
 
 async def test_run_batch_sanitizes_role_confused_worker_output(

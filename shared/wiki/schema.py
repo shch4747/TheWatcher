@@ -96,6 +96,14 @@ class ResourceFrontmatter(Frontmatter):
     added_by: str | None = None
 
 
+class InboxFrontmatter(Frontmatter):
+    """An agent's Inbox (`inbox/<agent>.md`) - the source of truth for
+    what that agent still has to look at (ADR-0014)."""
+
+    type: Literal["inbox"] = "inbox"
+    agent: str
+
+
 SCHEMA_BY_TYPE: dict[str, type[Frontmatter]] = {
     "member": MemberFrontmatter,
     "project": ProjectFrontmatter,
@@ -103,6 +111,7 @@ SCHEMA_BY_TYPE: dict[str, type[Frontmatter]] = {
     "channel": ChannelFrontmatter,
     "thread": ThreadFrontmatter,
     "resource": ResourceFrontmatter,
+    "inbox": InboxFrontmatter,
 }
 
 
@@ -152,6 +161,13 @@ SECTION_OWNERS: dict[str, dict[str, Owner]] = {
     "resource": {
         "Summary": "managed",
         "Notes": "human",
+    },
+    # Pending and Done are rewritten by shared/inbox only; a human may
+    # still add a line to Pending by hand and it is picked up (ADR-0014).
+    "inbox": {
+        "Pending": "managed",
+        "Done": "managed",
+        "Notes": "shared",
     },
 }
 

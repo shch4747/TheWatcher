@@ -28,6 +28,8 @@ __all__ = [
     "unregister_all",
     "due_jobs",
     "run_job",
+    "request_run",
+    "registered_jobs",
     "run_after_event",
     "ledger_tail",
     "render_agent_status",
@@ -67,6 +69,10 @@ class RunResult:
 
 _registry: dict[str, JobSpec] = {}
 _locks: dict[str, asyncio.Lock] = {}
+# Jobs asked to run on the next poll regardless of their trigger (see
+# request_run). In memory on purpose: a request lost to a restart only
+# delays the work to the job's own next scheduled run.
+_requested: set[str] = set()
 
 
 def register(
@@ -92,6 +98,21 @@ def register(
 def unregister_all() -> None:
     """Test-only: clear the registry between test cases."""
     _registry.clear()
+    _requested.clear()
+
+
+def registered_jobs() -> list[str]:
+    return sorted(_registry)
+
+
+def request_run(name: str) -> None:
+    """Make a registered job due on the next `due_jobs()` poll, whatever
+    its trigger says - "run this soon" without running it inline in the
+    caller (which may be holding another job's lock). Requests for the
+    same job coalesce into one run."""
+    if name not in _registry:
+        raise KeyError(name)
+    _requested.add(name)
 
 
 def _lock_for(key: str) -> asyncio.Lock:
@@ -113,8 +134,11 @@ async def _last_finished_at(job_name: str) -> datetime | None:
 
 async def due_jobs(now: datetime | None = None) -> list[str]:
     now = now or datetime.now(UTC)
-    due = []
+    due = [name for name in sorted(_requested) if name in _registry]
+    _requested.clear()
     for spec in _registry.values():
+        if spec.name in due:
+            continue
         if isinstance(spec.trigger, RunAfter):
             continue
         last = await _last_finished_at(spec.name)

@@ -19,8 +19,8 @@ For every watched channel (shared.gateway.interface.list_channels):
   - marks every buffered message for that channel `processed = False`,
     so the next `/ingest` (or the scheduled ingest_tick) re-cuts the
     full history into fresh threads.
-  - deletes any unconsumed project_agent Notices for that channel,
-    since they'd otherwise point at thread slugs that no longer exist.
+  - acknowledges any pending project_agent Inbox Items for that
+    channel, since they'd otherwise point at threads that no longer exist.
 
 A channel page's `## Notes` (shared, human-owned) is carried over to the
 rebuilt page; everything else on it is derived and regenerated.
@@ -39,21 +39,25 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from shared.db import Channel, MessageBuffer, Notice, get_session, init_db
+from shared.db import Channel, MessageBuffer, get_session, init_db
 from shared.gateway.interface import list_channels
+from shared.inbox.interface import Inbox
 from shared.wiki.interface import (
+    archive_dir,
+    channel_dir,
+    channel_page_path,
     default_vault_client,
     parse_page_lenient,
     render_new_channel_page,
-    slugify,
+    thread_dir,
 )
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 
 
 async def _reset_channel_page(vault, channel: Channel) -> str:
     """Delete and rewrite the channel's index page, keeping its Notes."""
-    slug = slugify(channel.title or channel.jid)
-    path = f"channels/{slug}.md"
+    slug = channel_dir(channel)
+    path = channel_page_path(channel)
     notes = ""
     revision = ""
     try:
@@ -70,7 +74,10 @@ async def _reset_channel_page(vault, channel: Channel) -> str:
     )
     if notes:
         fresh = fresh.replace("## Notes\n", f"## Notes\n{notes}\n", 1)
-    await vault.write(path, fresh, base_revision=revision)
+    if revision:
+        await vault.write(path, fresh, base_revision=revision)
+    else:
+        await vault.create(path, fresh)
     return path
 
 
@@ -100,10 +107,9 @@ async def main(skip_confirm: bool, include_archive: bool) -> None:
 
     total_threads_deleted = 0
     for channel in channels:
-        channel_dir = slugify(channel.title or channel.jid)
-        paths = await vault.list(f"channels/{channel_dir}")
+        paths = await vault.list(thread_dir(channel))
         if include_archive:
-            paths += await vault.list(f"channels/archive/{channel_dir}")
+            paths += await vault.list(archive_dir(channel))
         for path in paths:
             await vault.delete(path)
         total_threads_deleted += len(paths)
@@ -117,8 +123,9 @@ async def main(skip_confirm: bool, include_archive: bool) -> None:
             await session.execute(
                 update(MessageBuffer).where(MessageBuffer.channel == channel.jid).values(processed=False)
             )
-            await session.execute(delete(Notice).where(Notice.channel == channel.jid))
             await session.commit()
+        inbox = Inbox(vault, "project_agent")
+        await inbox.ack([i.id for i in await inbox.pending() if i.channel == channel.jid])
 
         async with get_session() as session:
             unprocessed_count = len(

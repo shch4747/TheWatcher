@@ -24,10 +24,11 @@ from shared.config import settings
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
 from shared.gateway.interface import InboundMessage, list_channels, notify_logs, register_message_hook
+from shared.inbox.interface import register_consumer
 from shared.models.decision import default_decision_client
 from shared.models.text import client_for_model, worker_model
 from shared.observability.interface import ingest_run, setup_tracing
-from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, run_job
+from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, request_run, run_job
 from shared.wiki.interface import default_vault_client
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,9 @@ def setup_jobs() -> None:
         max_retries=1,
         on_failure=_notify_job_failure,
     )
+    # A triggering Inbox Item (ADR-0014) runs the agent on the next
+    # scheduler poll instead of waiting out its RunEvery interval.
+    register_consumer("project_agent", lambda: request_run("project_agent_tick"))
 
 
 async def scheduler_loop(poll_seconds: float = SCHEDULER_POLL_SECONDS) -> None:

@@ -46,11 +46,13 @@ from shared.wiki.lapis_client import (
 )
 from shared.wiki.layout import (
     ChannelLike,
+    archive_dir,
     channel_dir,
     channel_page_path,
     inbox_page_path,
     initiative_page_path,
     member_page_path,
+    thread_dir,
 )
 from shared.wiki.lint import (
     LintIssue,
@@ -75,6 +77,8 @@ from shared.wiki.timeline import format_timeline_line, timeline_src_ids
 
 __all__ = [
     "ChannelLike",
+    "archive_dir",
+    "thread_dir",
     "channel_dir",
     "channel_page_path",
     "inbox_page_path",
