@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from agents.wa_agent import interface as wa_agent
 from httpx import ASGITransport
 from shared.db import BotAdmin, Channel, MembersRegistry, MessageBuffer, Proposal, get_session
 from shared.gateway import interface as gateway
@@ -64,7 +65,7 @@ async def _make_pending_proposal(channel: str, message_id: str) -> int:
 
 async def test_thumbs_up_from_admin_confirms_the_proposal():
     proposal_id = await _make_pending_proposal("chan-1", "wamid.PROP1")
-    reply = await gateway.handle_reaction(ADMIN, "wamid.PROP1", "\U0001f44d")
+    reply = await wa_agent.handle_reaction(ADMIN, "wamid.PROP1", "\U0001f44d")
     assert reply is not None
     assert "Linked" in reply
 
@@ -77,7 +78,7 @@ async def test_thumbs_up_from_admin_confirms_the_proposal():
 
 async def test_thumbs_up_from_non_admin_is_ignored():
     await _make_pending_proposal("chan-2", "wamid.PROP2")
-    reply = await gateway.handle_reaction("random@nobody", "wamid.PROP2", "\U0001f44d")
+    reply = await wa_agent.handle_reaction("random@nobody", "wamid.PROP2", "\U0001f44d")
     assert reply is None
 
     async with get_session() as session:
@@ -87,7 +88,7 @@ async def test_thumbs_up_from_non_admin_is_ignored():
 
 async def test_other_emoji_reaction_does_nothing():
     await _make_pending_proposal("chan-3", "wamid.PROP3")
-    reply = await gateway.handle_reaction(ADMIN, "wamid.PROP3", "\U0001f602")
+    reply = await wa_agent.handle_reaction(ADMIN, "wamid.PROP3", "\U0001f602")
     assert reply is None
 
 
@@ -103,7 +104,7 @@ async def test_expire_stale_proposals_marks_expired_and_notifies():
         await session.commit()
         proposal_id = proposal.id
 
-    count = await gateway.expire_stale_proposals()
+    count = await wa_agent.expire_stale_proposals()
     assert count >= 1
 
     async with get_session() as session:
@@ -177,6 +178,8 @@ async def test_webhook_reaction_event_confirms_proposal_end_to_end():
         await session.commit()
     proposal_id = await _make_pending_proposal(channel, "wamid.PROPWEBHOOK")
 
+    gateway.clear_hooks()
+    gateway.register_reaction_hook(wa_agent.handle_reaction)  # what main.py wires
     payload = reaction_event("wamid.REACTEVENT1", channel, ADMIN, "\U0001f44d", "wamid.PROPWEBHOOK")
     body = json.dumps(payload).encode()
     transport = ASGITransport(app=gateway_app)
@@ -184,6 +187,7 @@ async def test_webhook_reaction_event_confirms_proposal_end_to_end():
         resp = await client.post("/webhook/gowa", content=body, headers={"X-Hub-Signature-256": _sign(body)})
     assert resp.status_code == 200
 
+    gateway.clear_hooks()
     async with get_session() as session:
         proposal = await session.get(Proposal, proposal_id)
     assert proposal.status == "confirmed"

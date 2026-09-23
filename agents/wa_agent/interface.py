@@ -23,7 +23,6 @@ from shared.gateway.interface import (
     mark_consumed,
     notify_logs,
     pending_messages,
-    propose_wiki_write,
     resolve_sender,
 )
 from shared.gateway.interface import send as gateway_send
@@ -36,6 +35,14 @@ from sqlalchemy import select
 
 from agents.wa_agent.assign import CHATTER, NEW_THREAD, SenderNames, assign_batch
 from agents.wa_agent.messages import BufferedMessage, ThreadInfo
+from agents.wa_agent.proposals import (
+    confirm_proposal,
+    expire_stale_proposals,
+    handle_reaction,
+    pending_count,
+    propose_identity_link,
+    propose_wiki_write,
+)
 from agents.wa_agent.revise import ThreadRevision, revise_thread
 
 logger = logging.getLogger(__name__)
@@ -53,7 +60,18 @@ __all__ = [
     "identify_thread",
     "ThreadRevision",
     "revise_thread",
+    "confirm_proposal",
+    "expire_stale_proposals",
+    "handle_reaction",
+    "pending_proposals_line",
+    "propose_identity_link",
+    "propose_wiki_write",
 ]
+
+
+async def pending_proposals_line() -> str:
+    """The `/health` line for Proposals (registered with the Gateway)."""
+    return f"pending proposals: {await pending_count()}"
 
 
 # Channel kinds that are never ingested into threads. `logs` is the

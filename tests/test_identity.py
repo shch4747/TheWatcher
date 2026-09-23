@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from agents.wa_agent import interface as wa_agent
 from httpx import ASGITransport
 from shared.cms.interface import SeedFileCmsClient, fuzzy_match_member
 from shared.db import Channel, MembersRegistry, Proposal, get_session
@@ -75,7 +76,7 @@ async def test_unknown_sender_is_proposed_and_confirm_links_registry(
 ):
     await _seed_coordis_channel()
 
-    text = await gateway.propose_identity_link("919876500001@s.whatsapp.net", "Aira J", cms_client)
+    text = await wa_agent.propose_identity_link("919876500001@s.whatsapp.net", "Aira J", cms_client)
     assert "Aira" in text
     assert "\U0001f44d" in text
 
@@ -85,7 +86,7 @@ async def test_unknown_sender_is_proposed_and_confirm_links_registry(
     assert proposal.status == "pending"
     assert proposal.message_id is not None  # sent to the coordis channel
 
-    reply = await gateway.confirm_proposal(proposal.id, confirmed_by="admin@example", vault=vault)
+    reply = await wa_agent.confirm_proposal(proposal.id, confirmed_by="admin@example", vault=vault)
     assert "Linked" in reply
 
     async with get_session() as session:
@@ -101,14 +102,14 @@ async def test_no_match_offers_to_create_member_page(cms_client: SeedFileCmsClie
     await _seed_coordis_channel("coordis-group-2@g.us")
 
     wa_identity = "918888888888@s.whatsapp.net"
-    text = await gateway.propose_identity_link(wa_identity, "Totally New Person", cms_client)
+    text = await wa_agent.propose_identity_link(wa_identity, "Totally New Person", cms_client)
     assert "create a member page" in text.lower()
 
     async with get_session() as session:
         proposal = await session.scalar(select(Proposal).where(Proposal.kind == "create_member"))
     assert proposal is not None
 
-    reply = await gateway.confirm_proposal(proposal.id, confirmed_by="admin@example", vault=vault)
+    reply = await wa_agent.confirm_proposal(proposal.id, confirmed_by="admin@example", vault=vault)
     assert "Created" in reply
 
     page = (await vault.read("people/totally-new-person.md")).content
@@ -125,7 +126,7 @@ async def test_already_linked_sender_short_circuits(cms_client: SeedFileCmsClien
         session.add(MembersRegistry(wa_identity="already@linked", member_title="Devansh"))
         await session.commit()
 
-    text = await gateway.propose_identity_link("already@linked", "Devansh", cms_client)
+    text = await wa_agent.propose_identity_link("already@linked", "Devansh", cms_client)
     assert "already linked" in text.lower()
 
     async with get_session() as session:
@@ -150,7 +151,7 @@ async def test_expired_proposal_cannot_be_confirmed(cms_client: SeedFileCmsClien
         await session.commit()
         proposal_id = proposal.id
 
-    reply = await gateway.confirm_proposal(proposal_id, confirmed_by="admin@example", vault=vault)
+    reply = await wa_agent.confirm_proposal(proposal_id, confirmed_by="admin@example", vault=vault)
     assert "expired" in reply.lower()
 
     async with get_session() as session:

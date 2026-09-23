@@ -2,7 +2,7 @@
 v1.md): project page tasks reflect chat within one batch of an Update
 Notice; a human-ticked box is never overwritten by the next
 regeneration; confirmed Proposals execute identically for Events and
-Projects (already true via shared.gateway.confirm_proposal, exercised
+Projects (already true via the WhatsApp Agent's confirm_proposal, exercised
 in tests/test_chat_agent.py - not re-tested here)."""
 from __future__ import annotations
 

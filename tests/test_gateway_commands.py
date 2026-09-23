@@ -7,10 +7,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
 import pytest
+from agents.wa_agent import interface as wa_agent
 from httpx import ASGITransport
 from shared.config import settings
 from shared.db import BotAdmin, Channel, MembersRegistry, get_session
@@ -26,7 +28,8 @@ from shared.gateway.commands import (
     UnwatchCommand,
     parse_command,
 )
-from shared.wiki.interface import LocalDirClient
+from shared.scheduler.interface import RunEvery, register, unregister_all
+from shared.wiki.interface import LocalDirClient, ThreadStore, append_lines, dump_page, parse_page
 from sqlalchemy import select
 
 from tests.fake_gowa.app import app as fake_gowa_app
@@ -201,7 +204,12 @@ async def test_health_reports_gowa_vault_and_counts():
         session.add(Channel(jid="health-chan@g.us", kind="project"))
         await session.commit()
 
-    report = await gateway.health()
+    gateway.clear_hooks()
+    gateway.register_health_line(wa_agent.pending_proposals_line)  # what main.py wires
+    try:
+        report = await gateway.health()
+    finally:
+        gateway.clear_hooks()
     assert "gowa:" in report
     assert "vault:" in report
     assert "decision model:" in report
@@ -312,10 +320,18 @@ async def test_health_reports_last_run_of_each_scheduled_job():
         row.finished_at = row.started_at
         await session.commit()
 
-    report = await gateway.health()
+    async def _job() -> None: ...
+
+    unregister_all()
+    register("ingest_tick", _job, RunEvery(timedelta(minutes=2)))
+    register("lifecycle_tick", _job, RunEvery(timedelta(hours=24)))
+    try:
+        report = await gateway.health()
+    finally:
+        unregister_all()
     assert "ingest_tick: ❌" in report
     assert "boom" in report
-    assert "lifecycle_tick: no runs yet" in report or "lifecycle_tick:" in report
+    assert "lifecycle_tick: no runs yet" in report  # every registered job is listed
 
 
 async def test_link_writes_members_registry():
@@ -411,3 +427,31 @@ async def test_send_failure_during_command_does_not_crash_webhook_or_strand_mess
         channel = await session.scalar(select(Channel).where(Channel.jid == "999-sendfail@g.us"))
     assert row.processed is True  # not stranded
     assert channel is not None  # the command still took effect
+
+
+async def test_repeat_setup_keeps_the_channel_page_and_its_notes(vault: LocalDirClient):
+    jid = "repeat-setup@g.us"
+    await gateway.setup(jid, ADMIN, SetupCommand(kind="other", title="Hackspace"), vault)
+    current = await vault.read("channels/hackspace.md")
+    with_notes = append_lines(parse_page(current.content), "Notes", ["Keys are with the guard."])
+    await vault.write("channels/hackspace.md", dump_page(with_notes), current.revision)
+
+    assert await gateway.setup(jid, ADMIN, SetupCommand(kind="other", title="Hackspace"), vault) == "watching"
+    assert "Keys are with the guard." in (await vault.read("channels/hackspace.md")).content
+
+
+async def test_retitling_a_channel_moves_its_threads(vault: LocalDirClient):
+    jid = "retitle-setup@g.us"
+    await gateway.setup(jid, ADMIN, SetupCommand(kind="other", title="Old Name"), vault)
+    await vault.create(
+        "channels/old-name/20260901-hall.md",
+        "---\ntype: thread\nslug: 20260901-hall\nchannel: \"[[Old Name]]\"\ntitle: Hall\n"
+        "state: active\n---\n# Hall\n",
+    )
+
+    await gateway.setup(jid, ADMIN, SetupCommand(kind="other", title="New Name"), vault)
+
+    channel = await gateway.get_channel(jid)
+    assert [t.slug for t in await ThreadStore(vault, channel).threads()] == ["20260901-hall"]
+    assert parse_page((await vault.read("channels/new-name.md")).content).frontmatter.title == "New Name"
+    assert await vault.list("channels/old-name") == []

@@ -1,9 +1,12 @@
 """Gateway interface (ADR-0003): the only entry/exit point for WhatsApp.
 Every other package calls these functions, never `gowa_client` or the DB
-tables directly. Phase 0: webhook intake + send. Phase 2 (this module,
-extended): edge filtering (allowlist, DMs, admin commands before
-allowlisting), commands, singleton enforcement, channel/initiative page
-creation, /link.
+tables directly: webhook intake and edge filtering (allowlist, DMs, admin
+commands before allowlisting), send, the message buffer (`buffer.py`),
+commands (`/setup`, `/link`, ...), and the Member Registry.
+
+Proposals are not here - they belong to the WhatsApp Agent. The Gateway
+delivers reactions to whatever registered a reaction hook, and `/link`
+and a confirmed identity Proposal share `link_member`.
 """
 from __future__ import annotations
 
@@ -17,7 +20,6 @@ from datetime import UTC, datetime, timedelta, timezone
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from shared.cms.interface import CmsClientProtocol, MemberRecord, default_cms_client, fuzzy_match_member
 from shared.config import settings
 from shared.db import (
     BotAdmin,
@@ -25,7 +27,6 @@ from shared.db import (
     MembersRegistry,
     MessageBuffer,
     OutboundLog,
-    Proposal,
     SetupSession,
     get_session,
 )
@@ -53,22 +54,18 @@ from shared.gateway.commands import (
 )
 from shared.gateway.events import parse_gowa_event, wrap_backfilled_message
 from shared.gateway.gowa_client import GowaClient
-from shared.scheduler.interface import due_jobs, ledger_tail, run_job
+from shared.scheduler.interface import due_jobs, ledger_tail, registered_jobs, run_job
 from shared.wiki.interface import (
     LapisClient,
     PageExists,
+    ThreadStore,
     VaultClient,
-    append_lines,
     check_vault_connection,
     default_vault_client,
-    dump_page,
-    parse_page,
+    initiative_page_path,
     read_if_exists,
-    render_new_channel_page,
     render_new_event_page,
-    render_new_member_page,
     render_new_project_page,
-    slugify,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,6 +88,35 @@ def register_message_hook(hook: MessageHook) -> None:
     logged and swallowed - a broken Chat Agent must never break webhook
     intake."""
     _message_hooks.append(hook)
+
+
+# (reactor, reacted-to message id, emoji) - Proposal confirmation lives
+# in the WhatsApp Agent; the Gateway only delivers the reaction.
+ReactionHook = Callable[[str, str | None, str | None], Awaitable[object]]
+_reaction_hooks: list[ReactionHook] = []
+
+# Extra `/health` lines from modules the Gateway can't import (e.g. the
+# WhatsApp Agent's pending Proposal count).
+HealthLine = Callable[[], Awaitable[str]]
+_health_lines: list[HealthLine] = []
+
+
+def register_reaction_hook(hook: ReactionHook) -> None:
+    """Called for every reaction in an allowlisted group. Same failure
+    policy as message hooks."""
+    _reaction_hooks.append(hook)
+
+
+def register_health_line(line: HealthLine) -> None:
+    _health_lines.append(line)
+
+
+def clear_hooks() -> None:
+    """Test-only: forget every registered message/reaction hook and
+    health line."""
+    _message_hooks.clear()
+    _reaction_hooks.clear()
+    _health_lines.clear()
 
 
 class SendResult(BaseModel):
@@ -211,7 +237,11 @@ async def receive_webhook(raw_body: bytes, signature: str | None) -> bool:
                 row.processed = True
                 await session.commit()
     elif event_type == "message.reaction" and sender:
-        await handle_reaction(sender, event.reacted_message_id, event.reaction_emoji)
+        for reaction_hook in _reaction_hooks:
+            try:
+                await reaction_hook(sender, event.reacted_message_id, event.reaction_emoji)
+            except Exception:  # noqa: BLE001 - a broken hook must not break intake
+                logger.exception("reaction hook %r failed for channel %s", reaction_hook, channel)
     elif event_type == "message":
         message = to_inbound(buffered)
         for hook in _message_hooks:
@@ -273,11 +303,6 @@ async def list_channels(kind: str | None = None) -> list[Channel]:
     return list(rows)
 
 
-async def _initiative_page_exists(vault: VaultClient, kind: str, slug: str) -> bool:
-    path = f"{'projects' if kind == 'project' else 'events'}/{slug}.md"
-    return await read_if_exists(vault, path) is not None
-
-
 _DEFAULT_KIND_TITLES = {
     "coordis": "Coordis",
     "exes": "Exes",
@@ -288,22 +313,22 @@ _DEFAULT_KIND_TITLES = {
 }
 
 
-async def _ensure_channel_page(vault: VaultClient, title: str, kind: str) -> None:
-    """`coordis`/`exes`/`research`/`all`/`logs`/`other` channels never
-    got a `channels/<slug>.md` index page before - only project/event
-    channels did - so their vault directory name was whatever
-    `slugify(channel.title or channel_jid)` fell back to (the raw jid,
-    since title was never set either), and there was nowhere for
-    `regenerate_channel_threads_index` to write Active/Stale/Archived
-    links even once titles were fixed. Idempotent: a repeat `/setup`
-    (e.g. to backfill a title on an already-registered channel) never
-    clobbers an existing page."""
-    slug = slugify(title)
-    path = f"channels/{slug}.md"
-    try:
-        await vault.create(path, render_new_channel_page(title, kind))
-    except PageExists:
-        pass
+async def _register_channel(
+    vault: VaultClient, jid: str, kind: str, title: str, initiative: str | None
+) -> None:
+    """Allowlist the Channel and make sure it has a Channel Page. A repeat
+    `/setup` never replaces an existing page (or its Notes); one that
+    retitles the Channel moves its Threads and page to the new directory
+    instead of orphaning them."""
+    old = await get_channel(jid)
+    await _upsert_channel(jid, kind, title, initiative)
+    new = await get_channel(jid)
+    assert new is not None
+    if old is not None:
+        left_behind = await ThreadStore.relocate(vault, old, new)
+        if left_behind:
+            logger.warning("retitling %s left pages in place (targets existed): %s", jid, left_behind)
+    await ThreadStore(vault, new).ensure_channel_page()
 
 
 async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: VaultClient) -> str:
@@ -319,16 +344,14 @@ async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: V
             if existing is not None and existing.jid != channel_jid:
                 return f"A {cmd.kind} channel is already set up; refusing a second one."
         title = cmd.title or _DEFAULT_KIND_TITLES[cmd.kind]
-        await _upsert_channel(channel_jid, cmd.kind, title, initiative=None)
-        await _ensure_channel_page(vault, title, cmd.kind)
+        await _register_channel(vault, channel_jid, cmd.kind, title, initiative=None)
         return "watching"
 
     # project / event
     if not cmd.title:
         return f"/setup {cmd.kind} needs a title: /setup {cmd.kind} <Title>"
 
-    slug = slugify(cmd.title)
-    if not await _initiative_page_exists(vault, cmd.kind, slug):
+    if await read_if_exists(vault, initiative_page_path(cmd.kind, cmd.title)) is None:
         async with get_session() as session:
             session.add(
                 SetupSession(channel=channel_jid, kind=cmd.kind, title=cmd.title, requested_by=requested_by)
@@ -336,12 +359,7 @@ async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: V
             await session.commit()
         return f'Setting up "{cmd.title}" as a new {cmd.kind}. Who is the lead? (reply with their name)'
 
-    await _upsert_channel(channel_jid, cmd.kind, cmd.title, initiative=cmd.title)
-    channel_content = render_new_channel_page(cmd.title, cmd.kind, initiative=cmd.title)
-    try:
-        await vault.create(f"channels/{slug}.md", channel_content)
-    except PageExists:
-        pass  # a repeat /setup never replaces the page (or its Notes)
+    await _register_channel(vault, channel_jid, cmd.kind, cmd.title, initiative=cmd.title)
     return "watching"
 
 
@@ -377,21 +395,14 @@ async def continue_setup_session(channel_jid: str, reply_text: str, vault: Vault
         kind, title, requested_by = row.kind, row.title, row.requested_by
         await session.commit()
 
-    slug = slugify(title)
     lead_name = lead or requested_by
-    page = (
-        render_new_project_page(title, lead=lead_name, brief=brief or "")
-        if kind == "project"
-        else render_new_event_page(title, lead=lead_name, brief=brief or "")
-    )
-    await vault.create(f"{'projects' if kind == 'project' else 'events'}/{slug}.md", page)
-
-    await _upsert_channel(channel_jid, kind, title, initiative=title)
-    channel_content = render_new_channel_page(title, kind, initiative=title)
+    render = render_new_project_page if kind == "project" else render_new_event_page
     try:
-        await vault.create(f"channels/{slug}.md", channel_content)
+        page = render(title, lead=lead_name, brief=brief or "")
+        await vault.create(initiative_page_path(kind, title), page)
     except PageExists:
-        pass
+        pass  # created by someone else meanwhile - link to it, never replace it
+    await _register_channel(vault, channel_jid, kind, title, initiative=title)
     return f'"{title}" created (timeline: {timeline}). watching'
 
 
@@ -492,10 +503,11 @@ async def health() -> str:
     vault_status = "✅ ok" if vault_result.get("ok") else f"❌ {vault_result.get('error')}"
     lines.append(f"vault: {vault_status} ({vault_kind})")
 
-    if settings.jev_base_url:
-        decision_line = f"decision model: Jev ({settings.jev_base_url})"
+    # Same predicate default_decision_client() uses to pick Jev.
+    if settings.jev_api_key:
+        decision_line = f"decision model: Jev ({settings.jev_base_url or 'hosted'})"
     else:
-        decision_line = "decision model: Worker-backed (no Jev configured)"
+        decision_line = "decision model: Worker-backed (no JEV_API_KEY)"
     lines.append(decision_line)
     lines.append(f"worker model: {settings.worker_model_name}")
     lines.append(f"mentor model: {settings.mentor_model_name}")
@@ -503,15 +515,17 @@ async def health() -> str:
     async with get_session() as session:
         admin_count = len(list(await session.scalars(select(BotAdmin))))
         channel_count = len(list(await session.scalars(select(Channel).where(Channel.kind != "unset"))))
-        pending_proposals = len(
-            list(await session.scalars(select(Proposal).where(Proposal.status == "pending")))
-        )
 
     due = await due_jobs()
     lines.append(f"bot admins: {admin_count}  watched channels: {channel_count}")
-    lines.append(f"pending proposals: {pending_proposals}  jobs due: {len(due)} {due if due else ''}".strip())
+    lines.append(f"jobs due: {len(due)} {due if due else ''}".strip())
+    for health_line in _health_lines:
+        try:
+            lines.append(await health_line())
+        except Exception as exc:  # noqa: BLE001 - /health reports, never fails
+            lines.append(f"❌ {exc}")
 
-    for job_name in ("ingest_tick", "lifecycle_tick", "project_agent_tick"):
+    for job_name in registered_jobs():
         last = await ledger_tail(job_name, limit=1)
         if not last:
             lines.append(f"{job_name}: no runs yet")
@@ -548,17 +562,32 @@ async def link(cmd: LinkCommand, requested_by: str) -> str:
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /link."
     member_title = cmd.member_ref.strip("[]")
+    await link_member(cmd.sender_ref, member_title, linked_by=requested_by)
+    return f"Linked {cmd.sender_ref} to [[{member_title}]]."
+
+
+async def link_member(
+    wa_identity: str, member_title: str, cms_member_id: str | None = None, linked_by: str | None = None
+) -> None:
+    """Link (or re-link) a WhatsApp identity to a member in the Member
+    Registry. `/link` and confirmed identity Proposals both land here."""
     async with get_session() as session:
-        row = await session.get(MembersRegistry, cmd.sender_ref)
+        row = await session.get(MembersRegistry, wa_identity)
         if row is None:
             session.add(
-                MembersRegistry(wa_identity=cmd.sender_ref, member_title=member_title, linked_by=requested_by)
+                MembersRegistry(
+                    wa_identity=wa_identity,
+                    member_title=member_title,
+                    cms_member_id=cms_member_id,
+                    linked_by=linked_by,
+                )
             )
         else:
             row.member_title = member_title
-            row.linked_by = requested_by
+            row.linked_by = linked_by
+            if cms_member_id is not None:
+                row.cms_member_id = cms_member_id
         await session.commit()
-    return f"Linked {cmd.sender_ref} to [[{member_title}]]."
 
 
 async def handle_command(
@@ -596,11 +625,6 @@ async def resolve_sender(wa_identity: str) -> MembersRegistry | None:
         return await session.get(MembersRegistry, wa_identity)
 
 
-async def _admin_channel() -> str | None:
-    coordis = await _channel_by_kind("coordis")
-    return coordis.jid if coordis else None
-
-
 async def _logs_channel() -> str | None:
     logs = await _channel_by_kind("logs")
     return logs.jid if logs else None
@@ -620,199 +644,6 @@ async def notify_logs(text: str) -> bool:
         return False
     await send(channel, text)
     return True
-
-
-async def propose_identity_link(
-    wa_identity: str,
-    display_name: str,
-    cms_client: CmsClientProtocol | None = None,
-) -> str:
-    """Unknown sender -> fuzzy match against CMS member titles -> Proposal
-    to Bot Admins. No match proposes creating a member page instead of
-    guessing (Spec: Gateway identity)."""
-    already = await resolve_sender(wa_identity)
-    if already is not None:
-        return f"{wa_identity} is already linked to [[{already.member_title}]]."
-
-    cms_client = cms_client or default_cms_client()
-    candidates: list[MemberRecord] = await cms_client.list_members()
-    match = fuzzy_match_member(display_name, candidates)
-
-    expires_at = datetime.now(UTC) + timedelta(hours=settings.proposal_expiry_hours)
-    admin_channel = await _admin_channel()
-
-    if match is not None:
-        payload = json.dumps(
-            {"wa_identity": wa_identity, "member_title": match.title, "cms_member_id": match.cms_id}
-        )
-        text = f"Link *{display_name}* to [[{match.title}]]? \U0001f44d"
-        kind = "link_member"
-    else:
-        payload = json.dumps({"wa_identity": wa_identity, "display_name": display_name})
-        text = f"No member found for *{display_name}* - create a member page and link it? \U0001f44d"
-        kind = "create_member"
-
-    async with get_session() as session:
-        proposal = Proposal(
-            channel=admin_channel or "unknown",
-            kind=kind,
-            payload=payload,
-            expires_at=expires_at,
-        )
-        session.add(proposal)
-        await session.commit()
-        proposal_id = proposal.id
-
-    if admin_channel:
-        result = await send(admin_channel, text)
-        async with get_session() as session:
-            row = await session.get(Proposal, proposal_id)
-            if row is not None:
-                row.message_id = result.message_id
-                await session.commit()
-
-    return text
-
-
-async def propose_wiki_write(
-    channel_jid: str, path: str, section: str, line: str, preview_note: str | None = None
-) -> str:
-    """Any Chat Agent write is a Proposal (Spec: Chat Agent) - the bot
-    posts the exact change and waits for a thumbs-up rather than writing
-    directly. `line` is the literal text that will be appended to
-    `section` in `path` on confirm."""
-    expires_at = datetime.now(UTC) + timedelta(hours=settings.proposal_expiry_hours)
-    payload = json.dumps({"path": path, "section": section, "line": line})
-    text = preview_note or f"I'll add this to {path} ({section}):\n> {line}\n\n\U0001f44d to confirm."
-
-    async with get_session() as session:
-        proposal = Proposal(channel=channel_jid, kind="wiki_write", payload=payload, expires_at=expires_at)
-        session.add(proposal)
-        await session.commit()
-        proposal_id = proposal.id
-
-    result = await send(channel_jid, text)
-    async with get_session() as session:
-        row = await session.get(Proposal, proposal_id)
-        if row is not None:
-            row.message_id = result.message_id
-            await session.commit()
-    return text
-
-
-async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClient | None = None) -> str:
-    """Execute a pending Proposal (Spec: 👍 within 24h executes it). The
-    kind of proposal determines the effect; unknown kinds are refused
-    rather than silently ignored."""
-    async with get_session() as session:
-        proposal = await session.get(Proposal, proposal_id)
-        if proposal is None:
-            return "No such proposal."
-        if proposal.status != "pending":
-            return f"Proposal already {proposal.status}."
-        expires_at = proposal.expires_at
-        if expires_at is not None and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)  # SQLite drops tz on round-trip
-        if expires_at and datetime.now(UTC) > expires_at:
-            proposal.status = "expired"
-            await session.commit()
-            return "That proposal expired."
-
-        data = json.loads(proposal.payload)
-        kind = proposal.kind
-
-        if kind == "link_member":
-            wa_identity = data["wa_identity"]
-            member_title = data["member_title"]
-            cms_id = data.get("cms_member_id")
-            existing = await session.get(MembersRegistry, wa_identity)
-            if existing is None:
-                session.add(
-                    MembersRegistry(
-                        wa_identity=wa_identity,
-                        member_title=member_title,
-                        cms_member_id=cms_id,
-                        linked_by=confirmed_by,
-                    )
-                )
-            else:
-                existing.member_title = member_title
-                existing.cms_member_id = cms_id
-                existing.linked_by = confirmed_by
-            reply = f"Linked to [[{member_title}]]."
-        elif kind == "create_member":
-            vault = vault or default_vault_client()
-            title = data["display_name"]
-            await vault.create(f"people/{slugify(title)}.md", render_new_member_page(title))
-            session.add(
-                MembersRegistry(
-                    wa_identity=data["wa_identity"], member_title=title, linked_by=confirmed_by
-                )
-            )
-            reply = f"Created [[{title}]] and linked."
-        elif kind == "wiki_write":
-            vault = vault or default_vault_client()
-            path, section, line = data["path"], data["section"], data["line"]
-            read_result = await vault.read(path)
-            page = append_lines(parse_page(read_result.content), section, [line])
-            await vault.write(path, dump_page(page), base_revision=read_result.revision)
-            reply = f"Added to {path} ({section})."
-        else:
-            return f"Unknown proposal kind: {kind}"
-
-        proposal.status = "confirmed"
-        proposal.resolved_at = datetime.now(UTC)
-        proposal.resolved_by = confirmed_by
-        await session.commit()
-
-    return reply
-
-
-_THUMBS_UP = {"\U0001f44d", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿"}
-
-
-async def handle_reaction(reactor: str, message_id: str | None, emoji: str | None) -> str | None:
-    """A 👍 from a Bot Admin within 24h executes the reacted-to Proposal
-    (Spec: Chat Agent Proposal flow, reused for identity link proposals).
-    Distinguishing the initiative lead from a Bot Admin needs the wiki's
-    `lead:` frontmatter, which isn't wired in here yet - only Bot Admins
-    can confirm via reaction for now; lead-confirmation lands with the
-    Phase 5 Chat Agent ticket that already depends on this one.
-    """
-    if not message_id or emoji not in _THUMBS_UP:
-        return None
-    if not await is_bot_admin(reactor):
-        return None
-
-    async with get_session() as session:
-        proposal = await session.scalar(
-            select(Proposal).where(Proposal.message_id == message_id, Proposal.status == "pending")
-        )
-    if proposal is None:
-        return None
-    return await confirm_proposal(proposal.id, confirmed_by=reactor)
-
-
-async def expire_stale_proposals(now: datetime | None = None) -> int:
-    """Scheduler job body (Phase 3): expired proposals are dropped with a
-    one-line notice, never silently forgotten."""
-    now = now or datetime.now(UTC)
-    async with get_session() as session:
-        pending = await session.scalars(select(Proposal).where(Proposal.status == "pending"))
-        expired = [p for p in pending if p.expires_at and _aware(p.expires_at) < now]
-        for p in expired:
-            p.status = "expired"
-        await session.commit()
-        channels_and_ids = [(p.channel, p.id) for p in expired]
-
-    for channel, proposal_id in channels_and_ids:
-        if channel and channel != "unknown":
-            await send(channel, f"Proposal #{proposal_id} expired without a \U0001f44d.")
-    return len(channels_and_ids)
-
-
-def _aware(dt: datetime) -> datetime:
-    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 async def request_history(channel: str, count: int) -> int:

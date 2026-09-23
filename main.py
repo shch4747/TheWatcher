@@ -15,7 +15,10 @@ from datetime import UTC, datetime, timedelta
 import uvicorn
 from agents.project_agent.interface import run_project_agent_once
 from agents.wa_agent.interface import (
+    expire_stale_proposals,
     handle_chat_message,
+    handle_reaction,
+    pending_proposals_line,
     run_batch,
     run_lifecycle_for_channel,
     sunday_stale_nudge,
@@ -23,7 +26,14 @@ from agents.wa_agent.interface import (
 from shared.config import settings
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
-from shared.gateway.interface import InboundMessage, list_channels, notify_logs, register_message_hook
+from shared.gateway.interface import (
+    InboundMessage,
+    list_channels,
+    notify_logs,
+    register_health_line,
+    register_message_hook,
+    register_reaction_hook,
+)
 from shared.inbox.interface import register_consumer
 from shared.models.decision import default_decision_client
 from shared.models.text import client_for_model, worker_model
@@ -113,8 +123,14 @@ async def _notify_job_failure(job_name: str, error: str) -> None:
         logger.warning("job %s failed and there's no logs channel to notify: %s", job_name, error)
 
 
+async def _expire_proposals_tick() -> None:
+    await expire_stale_proposals()
+
+
 def setup_jobs() -> None:
     register_message_hook(_chat_hook)
+    register_reaction_hook(handle_reaction)
+    register_health_line(pending_proposals_line)
     register(
         "ingest_tick",
         _ingest_tick,
@@ -153,6 +169,14 @@ def setup_jobs() -> None:
         _project_agent_tick,
         RunEvery(timedelta(minutes=2)),
         lock_key="project_agent_tick",
+        max_retries=1,
+        on_failure=_notify_job_failure,
+    )
+    register(
+        "expire_proposals_tick",
+        _expire_proposals_tick,
+        RunEvery(timedelta(hours=1)),
+        lock_key="expire_proposals_tick",
         max_retries=1,
         on_failure=_notify_job_failure,
     )

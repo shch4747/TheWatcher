@@ -143,13 +143,13 @@ async def test_confirming_wiki_write_proposal_appends_to_notes(vault: LocalDirCl
     path = f"channels/{channel_dir}/some-thread.md"
     await vault.create(path, thread_page)
 
-    await gateway.propose_wiki_write("confirm-write-chan@g.us", path, "Notes", "- the demo moved to Friday")
+    await wa_agent.propose_wiki_write("confirm-write-chan@g.us", path, "Notes", "- the demo moved to Friday")
     async with get_session() as session:
         proposal = await session.scalar(
             select(Proposal).where(Proposal.channel == "confirm-write-chan@g.us")
         )
 
-    reply = await gateway.confirm_proposal(proposal.id, "admin@x", vault=vault)
+    reply = await wa_agent.confirm_proposal(proposal.id, "admin@x", vault=vault)
     assert "Added to" in reply
 
     updated = parse_page((await vault.read(path)).content)
