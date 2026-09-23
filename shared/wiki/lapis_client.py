@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-import httpx2
+import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 

@@ -65,7 +65,7 @@ def check_redundancy(idea: Idea, pitch_history: list[dict]) -> GateResult:
 
 
 def check_relevance(idea: Idea, org_snapshot: str) -> GateResult:
-    if idea.origin == Origin.GROUNDED:
+    if idea.origin == Origin.REMIDIAL:
         return GateResult(True, PitchStatus.PENDING, [])
     if not idea.statement.strip():
         return GateResult(False, PitchStatus.GATED_OUT, ["empty statement"])
@@ -73,11 +73,11 @@ def check_relevance(idea: Idea, org_snapshot: str) -> GateResult:
 
 
 def check_novelty(idea: Idea) -> GateResult:
-    if idea.origin == Origin.FREE:
+    if idea.origin == Origin.FRONTIER:
         if len(idea.statement.split()) < 8:
             return GateResult(False, PitchStatus.GATED_OUT, ["too thin to be substantive"])
         return GateResult(True, PitchStatus.PENDING, [])
-    # Everything else (grounded / bridged / events) is expected to cite
+    # Everything else (remedial / bridged / events) is expected to cite
     # real evidence, since each of those lanes is anchored in a specific
     # memory query rather than unconstrained like free.
     if not idea.evidence:

@@ -47,8 +47,8 @@ def grounded_on_closure(memory: MemoryInterface, project_id: str) -> list[Idea]:
         "Propose one piece of infrastructure or process that would prevent this recurring a "
         "fourth time. Do not propose merging or fixing the existing projects — that is handled "
         "elsewhere. Only propose something new."
-    ) + _feedback_context(memory, "grounded")
-    return generate_ideas(prompt, Origin.GROUNDED)
+    ) + _feedback_context(memory, "remedial")
+    return generate_ideas(prompt, Origin.REMEDIAL)
 
 
 def grounded_weekly_sweep(memory: MemoryInterface) -> list[Idea]:
@@ -62,8 +62,8 @@ def grounded_weekly_sweep(memory: MemoryInterface) -> list[Idea]:
         f"ARIES has these capabilities used only once and otherwise idle, each with the "
         f"project ID that used it: {idle}. Propose a new application for one of them, and cite "
         "that project ID as evidence for the capability's existence."
-    ) + _feedback_context(memory, "grounded")
-    return generate_ideas(prompt, Origin.GROUNDED)
+    ) + _feedback_context(memory, "remedial")
+    return generate_ideas(prompt, Origin.REMEDIAL)
 
 
 def bridged_on_research(memory: MemoryInterface, entry_id: str) -> list[Idea]:
@@ -114,5 +114,5 @@ def events_weekly_sweep(memory: MemoryInterface) -> list[Idea]:
         "what has actually engaged this audience before. Prefer formats similar to well-received "
         "past events over untested ones, and avoid repeating a pattern that scored poorly. Cite "
         "the specific past event ID(s) informing this pitch as evidence."
-    ) + _feedback_context(memory, "events")
-    return generate_ideas(prompt, Origin.EVENTS)
+    ) + _feedback_context(memory, "event")
+    return generate_ideas(prompt, Origin.EVENT)

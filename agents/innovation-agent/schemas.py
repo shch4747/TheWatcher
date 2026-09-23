@@ -12,10 +12,10 @@ from typing import Optional
 
 
 class Origin(str, Enum):
-    GROUNDED = "grounded"
+    REMEDIAL = "remedial"
     BRIDGED = "bridged"
-    FREE = "free"
-    EVENTS = "events"
+    FRONTIER = "frontier"
+    EVENT = "event"
 
 
 class EvidenceStatus(str, Enum):
