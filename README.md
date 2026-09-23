@@ -18,8 +18,9 @@ predate this design and are **frozen** until v1 ships; see
 
 ```
 shared/            cross-cutting packages every agent depends on
-  gateway/         gowa I/O: webhook intake, send, commands, identity, proposals
-  wiki/            schema, parser/serialiser, Lapis client, lint, derived regen, templates
+  gateway/         gowa I/O: webhook intake, message buffer, send, commands, Member Registry
+  wiki/            schema, parser, page editor, Thread Store, Lapis client, lint, templates
+  inbox/           agent Inboxes as inbox/<agent>.md on the wiki (ADR-0014)
   models/          Decision/Worker/Mentor model tiers, structured output, skills, benchmark
   scheduler/       job registry, run ledger, triggers, locks
   cms/             member lookup (ADR-0009)
@@ -27,7 +28,7 @@ shared/            cross-cutting packages every agent depends on
   db.py            the one SQLite schema (ADR-0005: one app, one database)
   http_adapter.py  thin JSON pass-through over the above, for out-of-process callers
 agents/
-  wa_agent/        batch cutting, structured thread assignment/writing, lifecycle, Chat Agent
+  wa_agent/        batch cutting, thread assignment + revision, lifecycle, Chat Agent, Proposals
   project_agent/   Item upsert into initiative pages, Status rewrite
   innovation-agent/  FROZEN - see ADR-0010
   research-agent/    FROZEN - see ADR-0010

@@ -3,7 +3,7 @@
 This is the v1 application described in `docs/Spec - Watcher v1.md` and
 `docs/Plan - Watcher v1.md`. Layout:
 
-- `shared/{gateway,scheduler,wiki,models,cms,observability}/` —
+- `shared/{gateway,scheduler,wiki,inbox,models,cms,observability}/` —
   cross-cutting packages every agent depends on. Each exposes exactly
   one `interface.py`: `async` functions with Pydantic models in and out.
 - `agents/wa_agent/` and `agents/project_agent/` — the two agents in v1
@@ -27,6 +27,13 @@ This is the v1 application described in `docs/Spec - Watcher v1.md` and
 - One Python application, one container (ADR-0005) — not one process per
   agent folder. `agents/*` is an ownership boundary for contributors, not
   a deployment boundary.
+- Wiki pages change only through the page editor (`set_fenced`,
+  `append_lines`, `append_items`, `upsert_items`, `set_field`,
+  `set_title`); it is the format's hard boundary against model output.
+  Thread pages go through `ThreadStore`, inbox pages through
+  `shared.inbox`, buffered messages through the Gateway's
+  `pending_messages` / `mark_consumed`. New pages are `create()`d; a
+  `write()` always carries the revision it was read at.
 - **`main.py` is the one exception**: it's the composition root, and the
   only file allowed to import across both `agents/*` packages and
   `shared/*` in the same place (registering jobs with the Scheduler,

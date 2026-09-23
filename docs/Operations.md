@@ -222,12 +222,21 @@ so a health-check loop can call them unconditionally.
 ## Recurring jobs
 
 `main.py` (what the Dockerfile actually runs, not raw `uvicorn`) wires
-five Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
-min), `project_agent_tick` (Inbox consumption, every 2 min),
-`lifecycle_tick` (stale/ended handling, daily), `sunday_nudge_tick`
-(daily, only acts on Sundays). It also registers the Chat Agent as a
-real-time message hook, so mentions/replies get answered immediately
-rather than waiting for the next batch. Check `GET /api/scheduler/due-jobs`
+six Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
+min), `ingest_now` (`/ingest` only), `project_agent_tick` (works through
+`inbox/project_agent.md`, every 2 min - or on the next 30 s poll when a
+triggering Inbox Item is posted, ADR-0014), `lifecycle_tick`
+(stale/ended handling, daily), `sunday_nudge_tick` (daily, only acts on
+Sundays) and `expire_proposals_tick` (hourly). It also registers the
+Chat Agent as a real-time message hook and Proposal confirmation as a
+reaction hook, so mentions/replies and 👍s are handled immediately
+rather than waiting for the next batch. `/health` lists the last run of
+every registered job.
+
+An agent's Inbox is a wiki page you can read (and add to: a line typed
+under `## Pending` is picked up as a request). Items move to `## Done`
+only after they were applied, so a failed apply shows up as an item
+that stays pending. Check `GET /api/scheduler/due-jobs`
 to see what's pending; `shared.scheduler.interface.ledger_tail(name)`
 for a job's recent run history (success/failure, errors).
 

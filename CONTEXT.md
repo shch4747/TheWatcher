@@ -5,11 +5,11 @@ Vocabulary for the WhatsApp side of Watcher: the modules that sit between gowa a
 ## Modules
 
 **Gateway**:
-The I/O module wrapping gowa. Delivers outbound messages, receives inbound events, serves raw message reads (by ID or range) to any agent. Contains no model.
+The I/O module wrapping gowa. Delivers outbound messages, receives inbound events, owns the buffer of messages not yet ingested (hands them out as pending messages, takes them back as consumed), serves message reads (by ID or range) to any agent, and keeps the Member Registry. Contains no model and makes no Proposals.
 _Avoid_: notification manager, WA notification + scheduling manager
 
 **WhatsApp Agent**:
-The model-driven module that ingests Batches from Channels, maintains Threads and Channel Pages, and posts Update Notices to other agents' Inboxes.
+The model-driven module that ingests Batches from Channels, maintains Threads and Channel Pages, posts Update Notices to other agents' Inboxes, and owns Proposals.
 _Avoid_: WA agent, ingestion pipeline (that is one part of it)
 
 **Chat Agent**:
@@ -71,13 +71,20 @@ The point in a Channel's (or Thread's) history up to which a consumer has read.
 ## Hand-offs
 
 **Inbox**:
-Where an agent finds out which Threads have changed since it last looked. Owned by that agent; posted to by the WhatsApp Agent. The content itself is read from the wiki.
+An agent's list of things to look at, kept as its page `inbox/<agent>.md` on the wiki - the source of truth, readable by humans, who may add to it. Items stay pending until the agent acknowledges them after doing the work.
+_Avoid_: queue, notices table
+
+**Inbox Item**:
+One entry in an Inbox. Either an Update Notice or a request a human typed in.
+
+**Triggering item**:
+An Inbox Item marked as work to do now: posting it wakes the agent instead of waiting for its next scheduled run. Every other item is routine.
 
 **Update Notice**:
-One Inbox entry: "Thread X in Channel Y has new material from Cursor Z".
+The Inbox Item "Thread X in Channel Y has new material from Cursor Z". A second notice for a Thread that already has one pending is merged into it.
 
 **Proposal**:
-A write an agent wants to make to the wiki, shown in the Channel and held (24 h) until the Initiative lead or a Bot Admin confirms with a 👍 reaction.
+A write an agent wants to make to the wiki (or the Member Registry), shown in the Channel and held (24 h) until the Initiative lead or a Bot Admin confirms with a 👍 reaction. Owned by the WhatsApp Agent.
 
 **Audit Log**:
 The wiki record of what the Gateway sent and on whose behalf. Bookkeeping, never a queue.
@@ -108,6 +115,12 @@ The HTML-comment pair that marks the agent-written region of a managed, append o
 **Item**:
 One line in a managed or append section with a block id and inline fields: a task, decision, resource, question, idea or update.
 _Avoid_: entry, bullet
+
+**Thread Store**:
+The module that holds one Channel's Threads and its Channel Page as the wiki stores them: where they live, which state each is in, how a new Thread gets its id, how a message is found on one, how Threads go stale, revive and are archived, and how they move when the Channel is retitled. Callers ask it for Threads, never for paths.
+
+**Page editor**:
+The only way agent code changes a page. Enforces Section Owners and Fences on every write and refuses content or frontmatter that would break the page's format.
 
 **Lint**:
 The job that validates every page against its schema and reports (never repairs, except additive defaults) to `meta/lint.md` and, daily, to the coordis Channel.

@@ -32,6 +32,7 @@ The wiki is read by humans in Obsidian/Lapis and read *and written* by agents. P
 10. **Every agent write is read-modify-write against a Lapis `baseRevision`.** A collision produces a Conflict Note, never a silent overwrite; the lint job surfaces `.sync-conflicts/`.
 11. **Round-trip idempotency is tested.** For every page type: parse → dump → parse yields the same model *and* the same bytes for untouched sections. This is the CI test that keeps agents from slowly mangling pages.
 12. **Lint reports; it does not repair** — except purely additive defaults (a missing optional key, a missing managed section skeleton).
+13. **Agents change pages only through the page editor** (`shared/wiki/editor.py`). It checks each write against the section's owner, touches only the fenced region, inserts a missing section at its schema position, escapes headings and fence markers in whatever it writes (so model output can't open a section or close a fence), and re-validates frontmatter after every change.
 
 ## Part 2 — Directory layout
 
@@ -50,7 +51,7 @@ The wiki is read by humans in Obsidian/Lapis and read *and written* by agents. P
 ├── resources/<slug>.md          type: resource    (typed: url, kind, related)
 ├── research/digests/<date>.md   type: digest      (Research Agent output)
 ├── innovation/<date>-<slug>.md  type: idea        (Innovation Agent output)
-├── inbox/<agent>.md             type: inbox       (derived, read-only mirror of Update Notices)
+├── inbox/<agent>.md             type: inbox       (an agent's Inbox - the source of truth, ADR-0014)
 └── meta/
     ├── channels.md              derived — Allowlist mirror (group JIDs are fine here)
     ├── agents/<agent>.md        derived — what the agent does, schedule, run ledger tail
@@ -169,10 +170,17 @@ summary_cursor: 3EB1…
 ### resource (`resources/<slug>.md`)
 Frontmatter: `kind` (`paper | repo | talk | article | note`), `url`, `related` (initiative slugs), `added_by`. Sections: `Summary` (managed if agent-added, human otherwise), `Notes` (human). Today's freeform notes become `kind: note` with their text under Notes.
 
-### inbox (`inbox/<agent>.md`) — derived, read-only
+### inbox (`inbox/<agent>.md`) — the agent's Inbox (ADR-0014)
+Frontmatter: `agent`. Written only through `shared/inbox`.
 ```markdown
-- 2026-09-19T09:45 — [[channels/watcher/20260918-demo-date]] from 3EB1A2 ^n-…
+## Pending          managed   (what the agent still has to do, oldest first)
+- [ ] Thread update: Moving the demo to Friday [kind:: thread_update] [channel:: 1203...@g.us] [slug:: 20260918-demo-date] [since:: 3EB1A2] [thread:: [[channels/watcher/20260918-demo-date]]] [posted:: 2026-09-19T09:45:00+00:00] ^n-4f1a09c2
+- [ ] Please re-check the budget          ← a human may add a line by hand; it's picked up as a request
+## Done             managed   (acknowledged after the work succeeded; last 50 kept)
+- [x] Thread update: Booking the hall [kind:: thread_update] … [done:: 2026-09-19T09:47:00+00:00] ^n-77c0e1d3
+## Notes            shared
 ```
+`[trigger:: now]` marks work the agent should do immediately rather than on its next scheduled run.
 
 ### meta/agents/<agent>.md — derived
 Purpose, inputs, outputs, schedule, and the last 20 rows of the run ledger (started, finished, outcome).

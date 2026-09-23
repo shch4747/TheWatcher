@@ -22,28 +22,32 @@ flowchart TB
     WA["WhatsApp<br/>(via gowa)"] -->|webhook, HMAC signed| GW
 
     subgraph Container["one container (ADR-0005)"]
-        GW["shared/gateway<br/>webhook intake, send, commands,<br/>identity, proposals, reactions"]
+        GW["shared/gateway<br/>webhook intake, message buffer,<br/>send, commands, Member Registry"]
         DB[("SQLite<br/>messages_buffer, channels, proposals,<br/>members_registry, jobs/runs, model_calls")]
         SCHED["shared/scheduler<br/>job registry, run ledger,<br/>per-key locks, retries"]
-        WAAGENT["agents/wa_agent<br/>batch cutter, structured thread<br/>assignment, lifecycle, Chat Agent"]
+        WAAGENT["agents/wa_agent<br/>batch cutter, structured thread<br/>assignment + revision, lifecycle,<br/>Chat Agent, Proposals"]
         PAAGENT["agents/project_agent<br/>Item upsert, Status rewrite"]
         MODELS["shared/models<br/>Decision (Jev) / Worker / Mentor,<br/>structured output, skills, benchmark"]
-        WIKI["shared/wiki<br/>schema, parser, lint,<br/>derived regen, templates"]
+        WIKI["shared/wiki<br/>schema, parser, page editor,<br/>Thread Store, lint, templates"]
+        INBOX["shared/inbox<br/>inbox/&lt;agent&gt;.md:<br/>post, pending, ack, wake"]
         CMS["shared/cms<br/>member lookup"]
         HTTP["shared/http_adapter<br/>/api/* JSON pass-through"]
         OBS["shared/observability<br/>cost/latency attribution,<br/>wiki audit, OTel traces"]
 
         GW --> DB
-        GW -->|is_admin_command| WAAGENT
+        GW -->|message + reaction hooks| WAAGENT
         SCHED -->|triggers batches,<br/>staleness, Sunday nudge| WAAGENT
         SCHED -->|triggers Inbox<br/>consumption| PAAGENT
         WAAGENT --> MODELS
         WAAGENT --> WIKI
-        WAAGENT -->|Update Notice| DB
-        PAAGENT -->|consumes Notice| DB
+        WAAGENT -->|pending_messages,<br/>mark_consumed| GW
+        WAAGENT -->|Update Notice| INBOX
+        PAAGENT -->|pending, ack| INBOX
+        INBOX --> WIKI
+        INBOX -.->|triggering item:<br/>request_run| SCHED
         PAAGENT --> WIKI
-        GW --> CMS
-        GW -->|Proposal confirm| WIKI
+        WAAGENT -->|Proposal confirm,<br/>link_member| GW
+        WAAGENT --> CMS
         HTTP --> GW
         HTTP --> WIKI
         HTTP --> SCHED
@@ -62,6 +66,13 @@ flowchart TB
     OBS -->|OTLP spans| PHOENIX["Phoenix<br/>(LLM traces, SQLite)"]
     DB -->|SELECT via<br/>sqlite datasource| GRAFANA["Grafana<br/>(cost + ingestion dashboard)"]
 ```
+
+The WhatsApp Agent reads messages only through the Gateway's
+`pending_messages` / `mark_consumed` (the buffer table is the Gateway's),
+writes Threads only through the Thread Store, and changes any page only
+through the page editor, which enforces Section Owners and Fences. An
+agent's Inbox is its page `inbox/<agent>.md`, reached only through
+`shared/inbox` (ADR-0014).
 
 Observability is a leaf: `shared/observability` depends on `shared.db`,
 `shared.config` and `shared.wiki` (the client protocol it wraps) and on
