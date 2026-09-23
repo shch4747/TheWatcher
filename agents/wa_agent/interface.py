@@ -30,17 +30,15 @@ from shared.models.interface import decide_with_fallback, generate
 from shared.models.text import TextModelClient
 from shared.wiki.interface import (
     VaultClient,
-    append_to_section,
+    append_lines,
     dump_page,
     parse_page,
     read_if_exists,
     render_new_thread_page,
-    replace_managed_section,
-    set_derived_section,
-    set_frontmatter_field,
-    set_h1_title,
+    set_fenced,
+    set_field,
+    set_title,
     slugify,
-    yaml_str,
 )
 from sqlalchemy import select
 
@@ -531,19 +529,18 @@ async def run_batch(
             result.model_calls += 1
             title = _sanitize_title(update.title, fallback_text=thread.title)
             if title != thread.title:
-                page = set_frontmatter_field(page, "title", yaml_str(title))
-                page = set_h1_title(page, title)
+                page = set_title(page, title)
             summary = _sanitize_summary(update.summary) or thread.summary
-            page = replace_managed_section(page, "Summary", summary)
-            page = replace_managed_section(page, "Items", items_text)
-            page = append_to_section(page, "Timeline", timeline_lines)
-            page = set_frontmatter_field(page, "last_message_at", last_message_at)
+            page = set_fenced(page, "Summary", summary)
+            page = set_fenced(page, "Items", items_text)
+            page = append_lines(page, "Timeline", timeline_lines)
+            page = set_field(page, "last_message_at", last_message_at)
             if thread.state == "stale":
                 # a new message revives a stale thread (Spec: "revivable") -
                 # last_message_at above is what keeps it revived: without
                 # bumping it, the next lifecycle_tick would just see the
                 # same stale timestamp and mark it stale again immediately.
-                page = set_frontmatter_field(page, "state", "active")
+                page = set_field(page, "state", "active")
                 result.threads_revived.append(key)
             await vault.write(thread.path, dump_page(page), base_revision=existing.revision)
             result.threads_updated.append(key)
@@ -621,9 +618,9 @@ async def regenerate_channel_threads_index(vault: VaultClient, channel: Channel,
             )
         )
 
-    page = set_derived_section(page, "Active threads", "\n".join(active_lines))
-    page = set_derived_section(page, "Stale threads", "\n".join(stale_lines))
-    page = set_derived_section(page, "Archived threads", "\n".join(archived_lines))
+    page = set_fenced(page, "Active threads", "\n".join(active_lines))
+    page = set_fenced(page, "Stale threads", "\n".join(stale_lines))
+    page = set_fenced(page, "Archived threads", "\n".join(archived_lines))
     await vault.write(page_path, dump_page(page), base_revision=existing.revision)
 
 
@@ -648,7 +645,7 @@ async def check_and_mark_stale(
         if last_message_at.tzinfo is None:
             last_message_at = last_message_at.replace(tzinfo=UTC)
         if now - last_message_at >= timedelta(days=settings.thread_stale_days):
-            updated = set_frontmatter_field(page, "state", "stale")
+            updated = set_field(page, "state", "stale")
             await vault.write(path, dump_page(updated), base_revision=result.revision)
             marked.append(page.frontmatter.slug)
     return marked

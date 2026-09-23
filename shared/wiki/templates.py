@@ -1,13 +1,14 @@
-"""Page templates (Wiki Format, Part 3). Used by /setup to create a
-channel + initiative page pair. Every managed/append/derived section
-starts with an empty fence skeleton; `repair_missing_sections` (lint.py)
-would produce the same shape for a page missing them.
+"""Page templates (Wiki Format, Part 3): frontmatter for each new page
+type. The sections come from `editor.new_page_sections`, i.e. from the
+Page Schema itself, so a template can't declare a section, owner or
+fence the editor wouldn't enforce.
 """
 from __future__ import annotations
 
-import json
 import re
 from datetime import UTC, date, datetime
+
+from shared.wiki.editor import new_page_sections, yaml_str
 
 SLUG_MAX_LEN = 80
 
@@ -18,20 +19,7 @@ def slugify(title: str) -> str:
     return slug or "untitled"
 
 
-def yaml_str(value: str) -> str:
-    """Safely encode free text as a YAML scalar for hand-built
-    frontmatter (Wiki Format: pages are built by string templates, not
-    `yaml.dump`, so nothing else escapes this). A JSON string literal is
-    always a valid YAML double-quoted scalar, so this is cheap and
-    exact: embedded newlines, quotes, colons, or a leading `-`/`#`/`[`
-    can never corrupt the frontmatter block or spill past the field
-    they belong to - which an unescaped LLM-generated title otherwise
-    can (it happened: a title containing blank lines and no quoting
-    silently ran on past its own `title:` line)."""
-    return json.dumps(value, ensure_ascii=False)
-
-
-def render_new_project_page(title: str, lead: str, slug: str | None = None) -> str:
+def render_new_project_page(title: str, lead: str, slug: str | None = None, brief: str = "") -> str:
     slug = slug or slugify(title)
     today = date.today().isoformat()
     return (
@@ -45,18 +33,10 @@ def render_new_project_page(title: str, lead: str, slug: str | None = None) -> s
         f"started: {today}\n"
         "---\n"
         f"# {title}\n"
-        "## Brief\n\n"
-        "## Status\n<!-- watcher:managed -->\n<!-- /watcher -->\n"
-        "## Open tasks\n<!-- watcher:managed -->\n<!-- /watcher -->\n"
-        "## Decisions\n<!-- watcher:append -->\n<!-- /watcher -->\n"
-        "## Log\n<!-- watcher:append -->\n<!-- /watcher -->\n"
-        "## Resources\n<!-- watcher:append -->\n<!-- /watcher -->\n"
-        "## Threads\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Notes\n"
-    )
+    ) + new_page_sections("project", {"Brief": brief})
 
 
-def render_new_event_page(title: str, lead: str, slug: str | None = None) -> str:
+def render_new_event_page(title: str, lead: str, slug: str | None = None, brief: str = "") -> str:
     slug = slug or slugify(title)
     return (
         "---\n"
@@ -68,16 +48,7 @@ def render_new_event_page(title: str, lead: str, slug: str | None = None) -> str
         "members: []\n"
         "---\n"
         f"# {title}\n"
-        "## Brief\n\n"
-        "## Status\n<!-- watcher:managed -->\n<!-- /watcher -->\n"
-        "## Logistics\n<!-- watcher:managed -->\n<!-- /watcher -->\n"
-        "## Decisions\n<!-- watcher:append -->\n<!-- /watcher -->\n"
-        "## Log\n<!-- watcher:append -->\n<!-- /watcher -->\n"
-        "## Resources\n<!-- watcher:append -->\n<!-- /watcher -->\n"
-        "## Threads\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Outcome\n\n"
-        "## Notes\n"
-    )
+    ) + new_page_sections("event", {"Brief": brief})
 
 
 def render_new_member_page(title: str, role: str = "Executive", slug: str | None = None) -> str:
@@ -92,12 +63,7 @@ def render_new_member_page(title: str, role: str = "Executive", slug: str | None
         "whatsapp: linked\n"
         "---\n"
         f"# {title}\n"
-        "## About\n\n"
-        "## Projects\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Past projects\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Open tasks\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Notes\n"
-    )
+    ) + new_page_sections("member")
 
 
 def render_new_thread_page(
@@ -125,7 +91,7 @@ def render_new_thread_page(
     # Entries arrive ready to write - "[[Member]]" for a linked sender,
     # a bare display name otherwise - so quote, don't wrap.
     participants_list = ", ".join(yaml_str(p) for p in participants)
-    message_ids_list = ", ".join(f'"{m}"' for m in message_ids)
+    message_ids_list = ", ".join(yaml_str(m) for m in message_ids)
     timeline_body = "\n".join(timeline_lines)
     return (
         "---\n"
@@ -139,20 +105,10 @@ def render_new_thread_page(
         f"last_message_at: {last}\n"
         f"participants: [{participants_list}]\n"
         f"message_ids: [{message_ids_list}]\n"
-        f"summary_cursor: {message_ids[-1] if message_ids else ''}\n"
+        f"summary_cursor: {yaml_str(message_ids[-1]) if message_ids else ''}\n"
         "---\n"
         f"# {title}\n"
-        "## Summary\n<!-- watcher:managed -->\n"
-        f"{summary}\n"
-        "<!-- /watcher -->\n"
-        "## Items\n<!-- watcher:managed -->\n"
-        f"{items_text}\n"
-        "<!-- /watcher -->\n"
-        "## Timeline\n<!-- watcher:append -->\n"
-        f"{timeline_body}\n"
-        "<!-- /watcher -->\n"
-        "## Notes\n"
-    )
+    ) + new_page_sections("thread", {"Summary": summary, "Items": items_text, "Timeline": timeline_body})
 
 
 def render_new_channel_page(
@@ -172,8 +128,4 @@ def render_new_channel_page(
         f"last_batch: {now}\n"
         "---\n"
         f"# {title}\n"
-        "## Active threads\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Stale threads\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Archived threads\n<!-- watcher:derived -->\n<!-- /watcher -->\n"
-        "## Notes\n"
-    )
+    ) + new_page_sections("channel")

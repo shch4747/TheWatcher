@@ -1,5 +1,10 @@
 """Wiki interface (ADR-0002, ADR-0003, ADR-0008).
 
+Every agent change to a page goes through the editor (`set_fenced`,
+`append_lines`, `append_items`, `upsert_items`, `set_field`,
+`set_title`), which enforces Section Owners and Fences - there is no
+other exported way to modify a section.
+
 Phase 1: schema + parser/serialiser, the Lapis client (live + local-dir
 test adapter, read/write with base revision, conflict detection), and
 the lint + derived-regeneration jobs. Everything below is re-exported
@@ -8,17 +13,21 @@ submodule directly (ADR-0003).
 """
 from __future__ import annotations
 
-from shared.wiki.derive import (
-    MemberIndexRow,
-    NotDerivedError,
-    ReadmeData,
-    append_to_section,
-    render_members_index,
-    render_readme,
-    replace_managed_section,
-    set_derived_section,
-    set_frontmatter_field,
-    set_h1_title,
+from shared.wiki.derive import MemberIndexRow, ReadmeData, render_members_index, render_readme
+from shared.wiki.editor import (
+    InvalidPageEdit,
+    Raw,
+    SectionOwnershipError,
+    append_items,
+    append_lines,
+    fenced_content,
+    neutralise,
+    new_page_sections,
+    set_fenced,
+    set_field,
+    set_title,
+    upsert_items,
+    yaml_str,
 )
 from shared.wiki.items import Item, format_item_line, parse_item_line, parse_items
 from shared.wiki.lapis_client import (
@@ -52,7 +61,6 @@ from shared.wiki.templates import (
     render_new_project_page,
     render_new_thread_page,
     slugify,
-    yaml_str,
 )
 
 __all__ = [
@@ -89,15 +97,21 @@ __all__ = [
     "render_lint_report",
     "repair_missing_sections",
     "MemberIndexRow",
-    "NotDerivedError",
     "ReadmeData",
     "render_members_index",
     "render_readme",
-    "set_derived_section",
-    "set_frontmatter_field",
-    "set_h1_title",
-    "append_to_section",
-    "replace_managed_section",
+    "InvalidPageEdit",
+    "Raw",
+    "SectionOwnershipError",
+    "append_items",
+    "append_lines",
+    "fenced_content",
+    "neutralise",
+    "new_page_sections",
+    "set_fenced",
+    "set_field",
+    "set_title",
+    "upsert_items",
     "render_new_channel_page",
     "render_new_event_page",
     "render_new_member_page",

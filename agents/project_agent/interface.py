@@ -21,12 +21,12 @@ from shared.models.text import TextModelClient
 from shared.wiki.interface import (
     Item,
     VaultClient,
-    append_to_section,
+    append_lines,
     dump_page,
     format_item_line,
     parse_items,
     parse_page,
-    replace_managed_section,
+    set_fenced,
     slugify,
 )
 from sqlalchemy import select
@@ -143,7 +143,7 @@ async def apply_thread_items_to_initiative(
         section = page.section(task_section_title)
         if section is not None:
             new_body = _upsert_items(section.body, by_kind["task"])
-            page = replace_managed_section(page, task_section_title, new_body.strip())
+            page = set_fenced(page, task_section_title, new_body.strip())
             result.tasks_upserted = len(by_kind["task"])
     elif "task" in by_kind:
         result.skipped_no_target_section.append("task")
@@ -153,17 +153,17 @@ async def apply_thread_items_to_initiative(
             f"- {i.text} [by:: system] [src:: {','.join(i.src_ids())}] ^{i.block_id}"
             for i in by_kind["decision"]
         ]
-        page = append_to_section(page, "Decisions", lines)
+        page = append_lines(page, "Decisions", lines)
         result.decisions_appended = len(lines)
 
     if "resource" in by_kind:
         lines = [f"- {i.text} [src:: {','.join(i.src_ids())}]" for i in by_kind["resource"]]
-        page = append_to_section(page, "Resources", lines)
+        page = append_lines(page, "Resources", lines)
         result.resources_appended = len(lines)
 
     if "question" in by_kind:
         lines = [f"- Open question: {i.text} [src:: {','.join(i.src_ids())}]" for i in by_kind["question"]]
-        page = append_to_section(page, "Log", lines)
+        page = append_lines(page, "Log", lines)
         result.log_lines_appended = len(lines)
 
     await vault.write(initiative_path, dump_page(page), base_revision=initiative_result.revision)
@@ -186,7 +186,7 @@ async def rewrite_status(vault: VaultClient, initiative_path: str, worker_client
         "Write a status update in at most 5 sentences."
     )
     text_result = await generate(worker_client, "worker", prompt)
-    page = replace_managed_section(page, "Status", text_result.text.strip())
+    page = set_fenced(page, "Status", text_result.text.strip())
     await vault.write(initiative_path, dump_page(page), base_revision=result.revision)
 
 

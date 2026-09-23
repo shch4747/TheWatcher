@@ -51,7 +51,7 @@ from shared.wiki.interface import (
     LapisClient,
     PageExists,
     VaultClient,
-    append_to_section,
+    append_lines,
     check_vault_connection,
     default_vault_client,
     dump_page,
@@ -370,12 +370,10 @@ async def continue_setup_session(channel_jid: str, reply_text: str, vault: Vault
     slug = slugify(title)
     lead_name = lead or requested_by
     page = (
-        render_new_project_page(title, lead=lead_name)
+        render_new_project_page(title, lead=lead_name, brief=brief or "")
         if kind == "project"
-        else render_new_event_page(title, lead=lead_name)
+        else render_new_event_page(title, lead=lead_name, brief=brief or "")
     )
-    if brief:
-        page = page.replace("## Brief\n\n", f"## Brief\n{brief}\n\n", 1)
     await vault.create(f"{'projects' if kind == 'project' else 'events'}/{slug}.md", page)
 
     await _upsert_channel(channel_jid, kind, title, initiative=title)
@@ -746,7 +744,7 @@ async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClie
             vault = vault or default_vault_client()
             path, section, line = data["path"], data["section"], data["line"]
             read_result = await vault.read(path)
-            page = append_to_section(parse_page(read_result.content), section, [line])
+            page = append_lines(parse_page(read_result.content), section, [line])
             await vault.write(path, dump_page(page), base_revision=read_result.revision)
             reply = f"Added to {path} ({section})."
         else:
