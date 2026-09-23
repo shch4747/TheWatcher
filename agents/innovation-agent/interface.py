@@ -61,8 +61,36 @@ async def publish_idea(vault: VaultClient, idea: Idea) -> str:
         trigger=idea.trigger_source_ids,
         slug=slug,
     )
+    # New page, nothing to conflict with yet - empty base_revision.
     await vault.write(path, content, base_revision="")
     return path
+
+
+async def get_closed_project_causes(vault: VaultClient) -> dict[str, str]:
+    """project path -> cause, for every dead project that has one.
+    Replaces MockMemory.get_all_closed_project_causes. `cause` is set by
+    a human, once, the moment they mark a project dead - never inferred
+    from prose, so this is a plain structured read, no LLM call."""
+    causes: dict[str, str] = {}
+    for path in await vault.list("projects/"):
+        result = await vault.read(path)
+        fm = parse_page(result.content).frontmatter
+        if fm.status == "dead" and fm.cause:
+            causes[path] = fm.cause
+    return causes
+
+
+async def get_capability_usage(vault: VaultClient) -> dict[str, list[str]]:
+    """technology -> list of project paths that used it. Replaces
+    MockMemory.get_capability_usage. `technologies` is set once, early,
+    by whoever creates the project page - same reasoning as above."""
+    usage: dict[str, list[str]] = {}
+    for path in await vault.list("projects/"):
+        result = await vault.read(path)
+        fm = parse_page(result.content).frontmatter
+        for tech in fm.technologies:
+            usage.setdefault(tech, []).append(path)
+    return usage
 
 
 async def get_reviewed_ideas(vault: VaultClient, lane: str | None = None) -> list[dict]:

@@ -49,6 +49,8 @@ class ProjectFrontmatter(Frontmatter):
     kanban: str | None = None
     health: float | None = None
     health_updated: date_type | None = None
+    technologies: list[str] = []
+    cause: str | None = None
 
 
 class EventFrontmatter(Frontmatter):
