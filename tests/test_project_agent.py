@@ -70,8 +70,8 @@ def vault(tmp_path: Path) -> LocalDirClient:
 
 
 async def test_apply_thread_items_upserts_by_kind(vault: LocalDirClient):
-    await vault.write("channels/x/t1.md", THREAD_WITH_ITEMS, base_revision="")
-    await vault.write("projects/watcher.md", INITIATIVE_PAGE, base_revision="")
+    await vault.create("channels/x/t1.md", THREAD_WITH_ITEMS)
+    await vault.create("projects/watcher.md", INITIATIVE_PAGE)
 
     result = await project_agent.apply_thread_items_to_initiative(
         vault, "channels/x/t1.md", "projects/watcher.md"
@@ -89,8 +89,8 @@ async def test_apply_thread_items_upserts_by_kind(vault: LocalDirClient):
 
 
 async def test_human_ticked_box_survives_reapplication(vault: LocalDirClient):
-    await vault.write("channels/x/t1.md", THREAD_WITH_ITEMS, base_revision="")
-    await vault.write("projects/watcher.md", INITIATIVE_PAGE, base_revision="")
+    await vault.create("channels/x/t1.md", THREAD_WITH_ITEMS)
+    await vault.create("projects/watcher.md", INITIATIVE_PAGE)
 
     await project_agent.apply_thread_items_to_initiative(vault, "channels/x/t1.md", "projects/watcher.md")
 
@@ -123,8 +123,8 @@ async def test_human_ticked_box_survives_reapplication(vault: LocalDirClient):
 
 
 async def test_event_uses_logistics_section(vault: LocalDirClient):
-    await vault.write("channels/x/t1.md", THREAD_WITH_ITEMS, base_revision="")
-    await vault.write("events/demo-day.md", EVENT_PAGE, base_revision="")
+    await vault.create("channels/x/t1.md", THREAD_WITH_ITEMS)
+    await vault.create("events/demo-day.md", EVENT_PAGE)
 
     result = await project_agent.apply_thread_items_to_initiative(
         vault, "channels/x/t1.md", "events/demo-day.md"
@@ -136,7 +136,7 @@ async def test_event_uses_logistics_section(vault: LocalDirClient):
 
 
 async def test_rewrite_status_replaces_managed_section(vault: LocalDirClient):
-    await vault.write("projects/watcher.md", INITIATIVE_PAGE, base_revision="")
+    await vault.create("projects/watcher.md", INITIATIVE_PAGE)
     await project_agent.rewrite_status(vault, "projects/watcher.md", ScriptedWorker("Great progress."))
 
     page = parse_page((await vault.read("projects/watcher.md")).content)
@@ -167,8 +167,8 @@ async def test_run_project_agent_once_end_to_end(vault: LocalDirClient):
     initiative_page = INITIATIVE_PAGE.replace("slug: watcher", "slug: pae2e").replace(
         "title: Watcher", "title: PaE2e"
     )
-    await vault.write("projects/pae2e.md", initiative_page, base_revision="")
-    await vault.write("channels/pae2e/t1.md", THREAD_WITH_ITEMS, base_revision="")
+    await vault.create("projects/pae2e.md", initiative_page)
+    await vault.create("channels/pae2e/t1.md", THREAD_WITH_ITEMS)
 
     results = await project_agent.run_project_agent_once(vault, ScriptedWorker())
     assert len(results) == 1

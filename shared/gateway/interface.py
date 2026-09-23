@@ -49,7 +49,7 @@ from shared.gateway.gowa_client import GowaClient
 from shared.scheduler.interface import due_jobs, ledger_tail, run_job
 from shared.wiki.interface import (
     LapisClient,
-    McpToolError,
+    PageExists,
     VaultClient,
     append_to_section,
     check_vault_connection,
@@ -60,6 +60,7 @@ from shared.wiki.interface import (
     render_new_event_page,
     render_new_member_page,
     render_new_project_page,
+    read_if_exists,
     slugify,
 )
 
@@ -264,11 +265,7 @@ async def list_channels(kind: str | None = None) -> list[Channel]:
 
 async def _initiative_page_exists(vault: VaultClient, kind: str, slug: str) -> bool:
     path = f"{'projects' if kind == 'project' else 'events'}/{slug}.md"
-    try:
-        await vault.read(path)
-        return True
-    except (FileNotFoundError, OSError, httpx.HTTPStatusError, McpToolError):
-        return False
+    return await read_if_exists(vault, path) is not None
 
 
 _DEFAULT_KIND_TITLES = {
@@ -294,9 +291,9 @@ async def _ensure_channel_page(vault: VaultClient, title: str, kind: str) -> Non
     slug = slugify(title)
     path = f"channels/{slug}.md"
     try:
-        await vault.read(path)
-    except (FileNotFoundError, OSError, httpx.HTTPStatusError, McpToolError):
-        await vault.write(path, render_new_channel_page(title, kind), base_revision="")
+        await vault.create(path, render_new_channel_page(title, kind))
+    except PageExists:
+        pass
 
 
 async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: VaultClient) -> str:
@@ -331,7 +328,10 @@ async def setup(channel_jid: str, requested_by: str, cmd: SetupCommand, vault: V
 
     await _upsert_channel(channel_jid, cmd.kind, cmd.title, initiative=cmd.title)
     channel_content = render_new_channel_page(cmd.title, cmd.kind, initiative=cmd.title)
-    await vault.write(f"channels/{slug}.md", channel_content, base_revision="")
+    try:
+        await vault.create(f"channels/{slug}.md", channel_content)
+    except PageExists:
+        pass  # a repeat /setup never replaces the page (or its Notes)
     return "watching"
 
 
@@ -376,11 +376,14 @@ async def continue_setup_session(channel_jid: str, reply_text: str, vault: Vault
     )
     if brief:
         page = page.replace("## Brief\n\n", f"## Brief\n{brief}\n\n", 1)
-    await vault.write(f"{'projects' if kind == 'project' else 'events'}/{slug}.md", page, base_revision="")
+    await vault.create(f"{'projects' if kind == 'project' else 'events'}/{slug}.md", page)
 
     await _upsert_channel(channel_jid, kind, title, initiative=title)
     channel_content = render_new_channel_page(title, kind, initiative=title)
-    await vault.write(f"channels/{slug}.md", channel_content, base_revision="")
+    try:
+        await vault.create(f"channels/{slug}.md", channel_content)
+    except PageExists:
+        pass
     return f'"{title}" created (timeline: {timeline}). watching'
 
 
@@ -732,7 +735,7 @@ async def confirm_proposal(proposal_id: int, confirmed_by: str, vault: VaultClie
         elif kind == "create_member":
             vault = vault or default_vault_client()
             title = data["display_name"]
-            await vault.write(f"people/{slugify(title)}.md", render_new_member_page(title), base_revision="")
+            await vault.create(f"people/{slugify(title)}.md", render_new_member_page(title))
             session.add(
                 MembersRegistry(
                     wa_identity=data["wa_identity"], member_title=title, linked_by=confirmed_by

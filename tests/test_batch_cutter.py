@@ -228,7 +228,7 @@ async def test_run_batch_updates_existing_thread_summary_items_appends_timeline_
         "## Timeline\n<!-- watcher:append -->\n- 2026-01-01 00:00 — someone old message [src:: old1]\n"
         "<!-- /watcher -->\n## Notes\nHuman note that must survive.\n"
     )
-    await vault.write("channels/existingproj/20260101-old-thread.md", existing_page, base_revision="")
+    await vault.create("channels/existingproj/20260101-old-thread.md", existing_page)
 
     ids = await _seed_messages("888-existing@g.us", ["Following up on the old thread"])
     message_id = ids[0]
@@ -329,7 +329,7 @@ async def test_run_batch_reuses_existing_item_block_ids(
 
     channel = "890-ids@g.us"
     await _seed_channel(channel, title="Ids")
-    await vault.write(
+    await vault.create(
         "channels/ids/existing.md",
         (
             "---\ntype: thread\nslug: existing\nchannel: \"[[Ids]]\"\ntitle: Existing\n"
@@ -339,9 +339,7 @@ async def test_run_batch_reuses_existing_item_block_ids(
             "- [ ] Book the seminar hall [kind:: task] [src:: old1] ^i-keepme\n"
             "<!-- /watcher -->\n"
             "## Timeline\n<!-- watcher:append -->\n- old [src:: old1]\n<!-- /watcher -->\n## Notes\n"
-        ),
-        base_revision="",
-    )
+        ))
     ids = await _seed_messages(channel, ["still on the hall"])
     worker = _worker(
         route={ids[0]: "existing"},

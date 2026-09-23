@@ -13,7 +13,6 @@ import re
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
-import httpx
 from shared.config import settings
 from shared.db import Channel, MessageBuffer, Notice, OutboundLog, aware_utc, get_session
 from shared.gateway.interface import (
@@ -30,11 +29,11 @@ from shared.models.decision import DecisionModelProtocol
 from shared.models.interface import decide_with_fallback, generate
 from shared.models.text import TextModelClient
 from shared.wiki.interface import (
-    McpToolError,
     VaultClient,
     append_to_section,
     dump_page,
     parse_page,
+    read_if_exists,
     render_new_thread_page,
     replace_managed_section,
     set_derived_section,
@@ -510,7 +509,7 @@ async def run_batch(
                 opened_at=bucket_messages[0].when,
                 last_message_at=bucket_messages[-1].when,
             )
-            await vault.write(f"channels/{channel_dir}/{slug}.md", page_text, base_revision="")
+            await vault.create(f"channels/{channel_dir}/{slug}.md", page_text)
             result.threads_created.append(slug)
             await _post_notice(channel, slug, bucket_messages[-1].message_id)
             touched_channel = True
@@ -583,9 +582,8 @@ async def regenerate_channel_threads_index(vault: VaultClient, channel: Channel,
     (nothing has backfilled it via `/setup <kind>`) is a no-op, not an
     error - there's nothing to write into."""
     page_path = f"channels/{slugify(channel.title or channel.jid)}.md"
-    try:
-        existing = await vault.read(page_path)
-    except (FileNotFoundError, OSError, httpx.HTTPStatusError, McpToolError):
+    existing = await read_if_exists(vault, page_path)
+    if existing is None:
         return
     page = parse_page(existing.content)
     if page.page_type != "channel":
@@ -668,7 +666,7 @@ async def archive_ended_threads(vault: VaultClient, channel_dir: str) -> list[st
         if page.page_type != "thread" or getattr(page.frontmatter, "state", None) != "ended":
             continue
         archive_path = f"channels/archive/{channel_dir}/{path.split('/')[-1]}"
-        await vault.write(archive_path, result.content, base_revision="")
+        await vault.create(archive_path, result.content)
         await vault.delete(path)
         archived.append(page.frontmatter.slug)
     return archived

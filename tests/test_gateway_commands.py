@@ -81,7 +81,7 @@ def test_parse_command_recognizes_all_shapes():
 
 
 async def test_setup_project_with_existing_page_allowlists_and_watches(vault: LocalDirClient):
-    await vault.write("projects/watcher.md", "existing page", base_revision="")
+    await vault.create("projects/watcher.md", "existing page")
     reply = await gateway.setup(
         PROJECT_GROUP, ADMIN, SetupCommand(kind="project", title="Watcher"), vault
     )
@@ -165,9 +165,8 @@ async def test_setup_singleton_kind_repeat_backfill_does_not_clobber_page(vault:
     await _clear_singleton_channel("coordis")
     group = "coordis-backfill@g.us"
     await gateway.setup(group, ADMIN, SetupCommand(kind="coordis", title=None), vault)
-    await vault.write(
-        "channels/coordis/some-thread.md", "unrelated thread content", base_revision=""
-    )
+    await vault.create(
+        "channels/coordis/some-thread.md", "unrelated thread content")
 
     # re-running /setup coordis (e.g. to pick up this fix on an
     # already-registered channel) must not overwrite the existing page

@@ -1,7 +1,7 @@
 """Audit wrapper around the wiki client (ADR-0013): every change the
 agents make to Lapis gets a row in `obs_vault_ops`.
 
-Wrapping the four-method `VaultClient` protocol rather than editing call
+Wrapping the five-method `VaultClient` protocol rather than editing call
 sites means this catches *every* mutation in the repo - the Gateway's
 `/setup` and proposal writes, the WA Agent's thread pages and archival
 deletes, the Project Agent's initiative writes - with no change to any
@@ -14,14 +14,15 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from shared.observability.record import CONFLICT, ERROR, OK, record_vault_op
-from shared.wiki.lapis_client import ConflictError, ReadResult, VaultClient, WriteResult
+from shared.wiki.lapis_client import ConflictError, PageExists, ReadResult, VaultClient, WriteResult
 
 
 class ObservedVaultClient:
-    """Delegates everything; records `write` and `delete`. Exceptions are
+    """Delegates everything; records `create`, `write` and `delete`. Exceptions are
     recorded and then re-raised unchanged - an audit trail that alters
     behaviour is worse than none."""
 
@@ -40,7 +41,22 @@ class ObservedVaultClient:
     async def list(self, prefix: str) -> list[str]:
         return await self._inner.list(prefix)
 
+    async def create(self, path: str, content: str) -> WriteResult:
+        return await self._observe("create", path, content, None, lambda: self._inner.create(path, content))
+
     async def write(self, path: str, content: str, base_revision: str) -> WriteResult:
+        return await self._observe(
+            "write", path, content, base_revision, lambda: self._inner.write(path, content, base_revision)
+        )
+
+    async def _observe(
+        self,
+        op: str,
+        path: str,
+        content: str,
+        base_revision: str | None,
+        call: Callable[[], Awaitable[WriteResult]],
+    ) -> WriteResult:
         started = time.monotonic()
         at = datetime.now(UTC)
         encoded = content.encode()
@@ -50,7 +66,7 @@ class ObservedVaultClient:
         async def _record(outcome: str, new_revision: str | None, error: str | None) -> None:
             await record_vault_op(
                 path,
-                "write",
+                op,
                 outcome,
                 base_revision=base_revision or None,
                 new_revision=new_revision,
@@ -62,7 +78,10 @@ class ObservedVaultClient:
             )
 
         try:
-            result = await self._inner.write(path, content, base_revision)
+            result = await call()
+        except PageExists as exc:
+            await _record(CONFLICT, None, str(exc))
+            raise
         except ConflictError as exc:
             await _record(CONFLICT, getattr(exc, "current_revision", None), str(exc))
             raise

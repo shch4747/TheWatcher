@@ -125,7 +125,7 @@ async def test_run_batch_routes_reply_straight_to_target_thread_without_asking_t
 
     channel = "557-reply-test@g.us"
     await _seed_channel(channel, title="Reply")
-    await vault.write(
+    await vault.create(
         "channels/reply/existing-thread.md",
         (
             "---\ntype: thread\nslug: existing-thread\n"
@@ -137,9 +137,7 @@ async def test_run_batch_routes_reply_straight_to_target_thread_without_asking_t
             "## Timeline\n<!-- watcher:append -->\n"
             "- 2026-01-01 00:00 — x orig message [src:: orig-1]\n<!-- /watcher -->\n"
             "## Notes\n"
-        ),
-        base_revision="",
-    )
+        ))
     await _seed_raw_messages(
         channel,
         [{"id": "reply-1", "text": "yes agreed", "sender": "y@z", "replied_to_id": "orig-1"}],
@@ -202,7 +200,7 @@ async def test_assignment_prompt_shows_existing_threads_with_title_summary_and_r
 
     channel = "562-context@g.us"
     await _seed_channel(channel, title="Ctx")
-    await vault.write(
+    await vault.create(
         "channels/ctx/20260101-hall.md",
         (
             "---\ntype: thread\nslug: 20260101-hall\nchannel: \"[[Ctx]]\"\n"
@@ -211,9 +209,7 @@ async def test_assignment_prompt_shows_existing_threads_with_title_summary_and_r
             "<!-- /watcher -->\n## Items\n<!-- watcher:managed -->\n<!-- /watcher -->\n"
             "## Timeline\n<!-- watcher:append -->\n"
             "- 2026-01-01 10:00 — [[Aira]]: can we book it [src:: m1]\n<!-- /watcher -->\n## Notes\n"
-        ),
-        base_revision="",
-    )
+        ))
     await _seed_raw_messages(channel, [{"id": "ctx-1", "text": "any news?", "sender": "z@z"}])
     worker = ScriptedStructuredWorker(route={"ctx-1": "20260101-hall"})
     await wa_agent.run_batch(channel, vault, worker)
@@ -235,7 +231,7 @@ async def test_run_batch_retitles_existing_thread_with_old_title_as_context(
 
     channel = "558-retitle-test@g.us"
     await _seed_channel(channel, title="Retitle")
-    await vault.write(
+    await vault.create(
         "channels/retitle/old-title.md",
         (
             "---\ntype: thread\nslug: old-title\n"
@@ -246,9 +242,7 @@ async def test_run_batch_retitles_existing_thread_with_old_title_as_context(
             "## Items\n<!-- watcher:managed -->\n<!-- /watcher -->\n"
             "## Timeline\n<!-- watcher:append -->\n<!-- /watcher -->\n"
             "## Notes\n"
-        ),
-        base_revision="",
-    )
+        ))
     await _seed_raw_messages(channel, [{"id": "rt-1", "text": "new info", "sender": "z@z"}])
     worker = ScriptedStructuredWorker(route={"rt-1": "old-title"})
     result = await wa_agent.run_batch(channel, vault, worker)
@@ -278,7 +272,7 @@ async def test_run_batch_regenerates_channel_active_threads_section_as_wikilinks
 
     channel = "559-index-test@g.us"
     await _seed_channel(channel, title="Idx")
-    await vault.write("channels/idx.md", render_new_channel_page("Idx", "project"), base_revision="")
+    await vault.create("channels/idx.md", render_new_channel_page("Idx", "project"))
     await _seed_raw_messages(channel, [{"id": "idx-1", "text": "book the hall", "sender": "x@y"}])
     result = await wa_agent.run_batch(channel, vault, ScriptedStructuredWorker())
     assert result is not None

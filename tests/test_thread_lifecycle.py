@@ -13,7 +13,7 @@ from agents.wa_agent import interface as wa_agent
 from httpx import ASGITransport
 from shared.db import BotAdmin, Channel, get_session
 from shared.gateway import interface as gateway
-from shared.wiki.interface import LocalDirClient, parse_page
+from shared.wiki.interface import LocalDirClient, PageNotFound, parse_page
 
 from tests.fake_gowa.app import app as fake_gowa_app
 from tests.gowa_payloads import message_event
@@ -50,12 +50,10 @@ async def test_check_and_mark_stale_flips_old_active_thread(vault: LocalDirClien
     old = (now - timedelta(days=10)).isoformat()
     recent = (now - timedelta(hours=1)).isoformat()
 
-    await vault.write(
-        "channels/proj/old-thread.md", _thread_page("old-thread", "active", old), base_revision=""
-    )
-    await vault.write(
-        "channels/proj/fresh-thread.md", _thread_page("fresh-thread", "active", recent), base_revision=""
-    )
+    await vault.create(
+        "channels/proj/old-thread.md", _thread_page("old-thread", "active", old))
+    await vault.create(
+        "channels/proj/fresh-thread.md", _thread_page("fresh-thread", "active", recent))
 
     marked = await wa_agent.check_and_mark_stale(vault, "proj", now=now)
     assert marked == ["old-thread"]
@@ -75,9 +73,8 @@ async def test_stale_thread_is_revived_by_a_new_message(
     monkeypatch.setattr(settings, "batch_quiet_minutes", 0)
 
     old = (datetime.now(UTC) - timedelta(days=10)).isoformat()
-    await vault.write(
-        "channels/revive/stale-thread.md", _thread_page("stale-thread", "stale", old), base_revision=""
-    )
+    await vault.create(
+        "channels/revive/stale-thread.md", _thread_page("stale-thread", "stale", old))
 
     async with get_session() as session:
         session.add(Channel(jid="revive-chan@g.us", kind="project", title="Revive", initiative="Revive"))
@@ -113,14 +110,13 @@ async def test_stale_thread_is_revived_by_a_new_message(
 
 async def test_archive_ended_threads_moves_file(vault: LocalDirClient):
     ended_at = datetime.now(UTC).isoformat()
-    await vault.write(
-        "channels/proj2/ended-thread.md", _thread_page("ended-thread", "ended", ended_at), base_revision=""
-    )
+    await vault.create(
+        "channels/proj2/ended-thread.md", _thread_page("ended-thread", "ended", ended_at))
 
     archived = await wa_agent.archive_ended_threads(vault, "proj2")
     assert archived == ["ended-thread"]
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(PageNotFound):
         await vault.read("channels/proj2/ended-thread.md")
 
     archived_content = (await vault.read("channels/archive/proj2/ended-thread.md")).content
@@ -147,11 +143,9 @@ async def test_sunday_nudge_posts_counts_and_links(vault: LocalDirClient, monkey
     now = datetime.now(UTC)
     old = (now - timedelta(days=10)).isoformat()
     for i in range(12):
-        await vault.write(
+        await vault.create(
             f"channels/nudgeproj/stale-{i}.md",
-            _thread_page(f"stale-{i}", "stale", old),
-            base_revision="",
-        )
+            _thread_page(f"stale-{i}", "stale", old))
 
     text = await wa_agent.sunday_stale_nudge(vault, now=now)
     assert text is not None

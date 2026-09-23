@@ -154,13 +154,13 @@ async def _vault_ops(path: str) -> list[VaultOp]:
 
 async def test_writes_and_deletes_are_audited_reads_are_not(vault: LocalDirClient):
     observed = ObservedVaultClient(vault)
-    await observed.write("channels/a.md", "hello", base_revision="")
+    await observed.create("channels/a.md", "hello")
     await observed.read("channels/a.md")
     await observed.list("channels")
     await observed.delete("channels/a.md")
 
     ops = await _vault_ops("channels/a.md")
-    assert [o.operation for o in ops] == ["write", "delete"]  # read/list not recorded
+    assert [o.operation for o in ops] == ["create", "delete"]  # read/list not recorded
     assert ops[0].outcome == "ok"
     assert ops[0].content_bytes == 5
     assert ops[0].content_sha256 is not None
@@ -170,7 +170,7 @@ async def test_writes_and_deletes_are_audited_reads_are_not(vault: LocalDirClien
 async def test_audit_is_transparent_to_the_caller(vault: LocalDirClient, tmp_path: Path):
     """Wrapping must not change what lands on disk or what's returned."""
     observed = ObservedVaultClient(vault)
-    result = await observed.write("channels/b.md", "body", base_revision="")
+    result = await observed.create("channels/b.md", "body")
     assert (tmp_path / "channels/b.md").read_text() == "body"
     assert (await observed.read("channels/b.md")).content == "body"
     assert result.revision == (await vault.read("channels/b.md")).revision
@@ -178,7 +178,7 @@ async def test_audit_is_transparent_to_the_caller(vault: LocalDirClient, tmp_pat
 
 async def test_conflict_is_recorded_and_still_raised(vault: LocalDirClient):
     observed = ObservedVaultClient(vault)
-    await observed.write("channels/c.md", "first", base_revision="")
+    await observed.create("channels/c.md", "first")
     with pytest.raises(ConflictError):
         await observed.write("channels/c.md", "second", base_revision="stale-revision")
 
@@ -194,7 +194,7 @@ async def test_vault_ops_carry_the_ambient_channel():
     with tempfile.TemporaryDirectory() as tmp:
         observed = ObservedVaultClient(LocalDirClient(Path(tmp)))
         with scope(channel_jid="vault-attr@g.us", phase=SUMMARISATION):
-            await observed.write("channels/d.md", "x", base_revision="")
+            await observed.create("channels/d.md", "x")
     ops = await _vault_ops("channels/d.md")
     assert ops[0].channel_jid == "vault-attr@g.us"
     assert ops[0].phase == SUMMARISATION

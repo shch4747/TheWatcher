@@ -53,11 +53,56 @@ class ConflictError(Exception):
         self.current_revision = current_revision
 
 
+class PageNotFound(LookupError):
+    """`read()` of a path that doesn't exist. Every adapter raises this and
+    only this for a missing page - a transport failure is never mistaken
+    for "doesn't exist yet, go ahead and create it"."""
+
+    def __init__(self, path: str):
+        super().__init__(f"no page at {path}")
+        self.path = path
+
+
+class PageExists(Exception):
+    """`create()` of a path that already exists. Nothing was written."""
+
+    def __init__(self, path: str):
+        super().__init__(f"page already exists at {path}")
+        self.path = path
+
+
 class VaultClient(Protocol):
+    """The wiki store. Every adapter honours the same contract (and
+    `tests/test_vault_contract.py` runs the same suite against each):
+
+    - `read` returns the *whole* page, or raises `PageNotFound`.
+    - `create` writes a page that must not exist yet, or raises
+      `PageExists` and writes nothing.
+    - `write` replaces an existing page read at `base_revision` (never
+      empty - use `create` for a new page); a stale revision raises
+      `ConflictError` and never overwrites.
+    - `list` returns every `.md` path under a prefix, conflict notes
+      excluded. `delete` of a missing path is a no-op.
+    """
+
     async def read(self, path: str) -> ReadResult: ...
+    async def create(self, path: str, content: str) -> WriteResult: ...
     async def write(self, path: str, content: str, base_revision: str) -> WriteResult: ...
     async def list(self, prefix: str) -> list[str]: ...
     async def delete(self, path: str) -> None: ...
+
+
+def _require_base_revision(path: str, base_revision: str) -> None:
+    if not base_revision:
+        raise ValueError(f"write({path!r}) needs the base_revision it was read at - use create() for a new page")
+
+
+async def read_if_exists(vault: VaultClient, path: str) -> ReadResult | None:
+    """`read`, with a missing page as None instead of an exception."""
+    try:
+        return await vault.read(path)
+    except PageNotFound:
+        return None
 
 
 def _hash(content: str) -> str:
@@ -78,17 +123,30 @@ class LocalDirClient:
         return self.root / path
 
     async def read(self, path: str) -> ReadResult:
-        content = self._file(path).read_text()
+        file = self._file(path)
+        if not file.is_file():
+            raise PageNotFound(path)
+        content = file.read_text()
         return ReadResult(content=content, revision=_hash(content))
 
-    async def write(self, path: str, content: str, base_revision: str) -> WriteResult:
+    async def create(self, path: str, content: str) -> WriteResult:
         file = self._file(path)
-        if file.exists():
-            current_content = file.read_text()
-            current_revision = _hash(current_content)
-            if base_revision != current_revision:
-                self._write_conflict_note(path, base_revision, current_content, content)
-                raise ConflictError(path, base_revision, current_revision)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with file.open("x") as handle:  # exclusive: fails if it exists
+                handle.write(content)
+        except FileExistsError:
+            raise PageExists(path) from None
+        return WriteResult(revision=_hash(content))
+
+    async def write(self, path: str, content: str, base_revision: str) -> WriteResult:
+        _require_base_revision(path, base_revision)
+        file = self._file(path)
+        current_content = file.read_text() if file.is_file() else ""
+        current_revision = _hash(current_content) if file.is_file() else ""
+        if base_revision != current_revision:
+            self._write_conflict_note(path, base_revision, current_content, content)
+            raise ConflictError(path, base_revision, current_revision)
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(content)
         return WriteResult(revision=_hash(content))
@@ -168,11 +226,30 @@ async def check_vault_connection(vault: VaultClient) -> dict:
 
 
 _CONFLICT_RE = re.compile(r"server has (\d+), client base is (\d+)")
+# Error texts from Lapis's worker/src/mcp/server.ts that mean something
+# specific at our seam - everything else stays a generic McpToolError.
+_NOT_FOUND_TEXTS = ("File not found", "Path not found")
+_EXISTS_TEXT = "baseRevision is required when replacing an existing file"
+_READ_PAGE_LINES = 2000  # the read tool's max `limit`
+_FIND_PAGE_SIZE = 1000  # the find tool's max `limit`
 
 
 class McpToolError(Exception):
     """A Lapis MCP tool call returned isError - anything other than a
     revision conflict (that's ConflictError instead)."""
+
+
+def _raise_tool_error(name: str, arguments: dict[str, Any], text: str) -> None:
+    """Map a Lapis tool's error text onto the seam's typed errors."""
+    path = arguments.get("path", "")
+    match = _CONFLICT_RE.search(text)
+    if match:
+        raise ConflictError(path, match.group(2), match.group(1))
+    if any(t in text for t in _NOT_FOUND_TEXTS):
+        raise PageNotFound(path)
+    if _EXISTS_TEXT in text:
+        raise PageExists(path)
+    raise McpToolError(f"lapis mcp tool {name!r} failed: {text}")
 
 
 class LapisClient:
@@ -188,8 +265,16 @@ class LapisClient:
         self.token = token
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         arguments = {"vault": self.vault_id, **arguments}
+        is_error, text = await self._transport(name, arguments)
+        if is_error:
+            _raise_tool_error(name, arguments, text)
+        return json.loads(text) if text else {}
+
+    async def _transport(self, name: str, arguments: dict[str, Any]) -> tuple[bool, str]:
+        """One MCP tool call -> (is_error, first text block). The only
+        method that touches the network; tests replace it."""
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         async with httpx2.AsyncClient(timeout=30, headers=headers) as http_client:
             async with streamable_http_client(
                 f"{self.base_url}/api/mcp", http_client=http_client
@@ -197,30 +282,38 @@ class LapisClient:
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     result = await session.call_tool(name, arguments)
-
-        text = ""
-        for block in result.content:
-            if block.type == "text":
-                text = block.text
-                break
-
-        if result.is_error:
-            match = _CONFLICT_RE.search(text)
-            if match:
-                raise ConflictError(
-                    arguments.get("path", ""), match.group(2), match.group(1)
-                )
-            raise McpToolError(f"lapis mcp tool {name!r} failed: {text}")
-
-        return json.loads(text) if text else {}
+        text = next((block.text for block in result.content if block.type == "text"), "")
+        return bool(result.is_error), text
 
     async def read(self, path: str) -> ReadResult:
-        data = await self._call_tool("read", {"path": path, "limit": 2000})
-        if data.get("binary"):
-            raise McpToolError(f"{path} is a binary file - LapisClient.read() only supports text")
-        numbered_lines = data["text"].split("\n") if data["text"] else []
-        content = "\n".join(line.split("|", 1)[1] if "|" in line else line for line in numbered_lines)
-        return ReadResult(content=content, revision=str(data["revision"]))
+        """The read tool is line-paged (`offset`/`limit`, `truncated`);
+        a long page - an append-only Timeline gets long - is fetched in
+        pages, never silently cut at the first one and written back
+        shorter."""
+        lines: list[str] = []
+        offset = 1
+        revision = ""
+        while True:
+            data = await self._call_tool("read", {"path": path, "offset": offset, "limit": _READ_PAGE_LINES})
+            if data.get("binary"):
+                raise McpToolError(f"{path} is a binary file - LapisClient.read() only supports text")
+            if revision and str(data["revision"]) != revision:
+                offset, lines, revision = 1, [], ""  # changed between pages - start over
+                continue
+            revision = str(data["revision"])
+            numbered = data["text"].split("\n") if data["text"] else []
+            lines += [line.split("|", 1)[1] if "|" in line else line for line in numbered]
+            if not data.get("truncated"):
+                break
+            offset = int(data["endLine"]) + 1
+        return ReadResult(content="\n".join(lines), revision=revision)
+
+    async def create(self, path: str, content: str) -> WriteResult:
+        """No baseRevision: Lapis refuses that for a path that exists
+        (mapped to PageExists in `_call_tool`), which is exactly
+        create-if-absent."""
+        data = await self._call_tool("write", {"path": path, "content": content})
+        return WriteResult(revision=str(data["entry"]["revision"]))
 
     async def write(self, path: str, content: str, base_revision: str) -> WriteResult:
         """Lapis's `write` tool never raises for a stale base_revision -
@@ -230,9 +323,8 @@ class LapisClient:
         collides. `entry.conflict` is how that soft signal shows up; we
         turn it back into a raised ConflictError here so callers keep
         ADR-0002's "never a silent clobber, always visible" contract."""
-        arguments: dict[str, Any] = {"path": path, "content": content}
-        if base_revision:
-            arguments["baseRevision"] = int(base_revision)
+        _require_base_revision(path, base_revision)
+        arguments: dict[str, Any] = {"path": path, "content": content, "baseRevision": int(base_revision)}
         data = await self._call_tool("write", arguments)
         entry = data["entry"]
         conflict = entry.get("conflict")
@@ -246,8 +338,19 @@ class LapisClient:
 
     async def list(self, prefix: str) -> list[str]:
         pattern = f"{prefix.rstrip('/')}/**" if prefix else "**"
-        data = await self._call_tool("find", {"pattern": pattern, "limit": 1000})
-        return [p for p in data.get("paths", []) if p.endswith(".md") and ".sync-conflicts" not in p]
+        paths: list[str] = []
+        offset = 0
+        while True:
+            data = await self._call_tool("find", {"pattern": pattern, "limit": _FIND_PAGE_SIZE, "offset": offset})
+            page = data.get("paths", [])
+            paths += page
+            if not data.get("truncated") or not page:
+                break
+            offset += len(page)
+        return [p for p in paths if p.endswith(".md") and ".sync-conflicts" not in p]
 
     async def delete(self, path: str) -> None:
-        await self._call_tool("rm", {"path": path})
+        try:
+            await self._call_tool("rm", {"path": path})
+        except PageNotFound:
+            pass

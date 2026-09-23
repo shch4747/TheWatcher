@@ -85,7 +85,7 @@ async def test_non_addressed_message_is_ignored(vault: LocalDirClient):
 
 async def test_mention_with_question_answers_from_thread_and_quotes(vault: LocalDirClient):
     channel_dir = await _seed_channel()
-    await vault.write(f"channels/{channel_dir}/hall-booking.md", THREAD_PAGE, base_revision="")
+    await vault.create(f"channels/{channel_dir}/hall-booking.md", THREAD_PAGE)
 
     payload = _message_payload("@watcher who owns the hall booking?", "q1")
     reply = await wa_agent.handle_chat_message(
@@ -100,7 +100,7 @@ async def test_mention_with_question_answers_from_thread_and_quotes(vault: Local
 
 async def test_reply_to_bot_message_also_triggers(vault: LocalDirClient):
     channel_dir = await _seed_channel("reply-trigger-chan@g.us", "ReplyTrigger")
-    await vault.write(f"channels/{channel_dir}/hall-booking.md", THREAD_PAGE, base_revision="")
+    await vault.create(f"channels/{channel_dir}/hall-booking.md", THREAD_PAGE)
 
     async with get_session() as session:
         session.add(OutboundLog(channel="reply-trigger-chan@g.us", text="watching", message_id="bot-msg-1"))
@@ -120,7 +120,7 @@ async def test_write_request_produces_a_proposal_not_a_direct_write(vault: Local
     thread_page = THREAD_PAGE.replace('slug: hall-booking', 'slug: demo-date').replace(
         "ChatAgentProj", "WriteReq"
     )
-    await vault.write(f"channels/{channel_dir}/demo-date.md", thread_page, base_revision="")
+    await vault.create(f"channels/{channel_dir}/demo-date.md", thread_page)
 
     payload = message_event(
         "w1", "write-req-chan@g.us", "@watcher note the demo moved to Friday", sender="member@x"
@@ -151,7 +151,7 @@ async def test_confirming_wiki_write_proposal_appends_to_notes(vault: LocalDirCl
         "ChatAgentProj", "ConfirmWrite"
     )
     path = f"channels/{channel_dir}/some-thread.md"
-    await vault.write(path, thread_page, base_revision="")
+    await vault.create(path, thread_page)
 
     await gateway.propose_wiki_write("confirm-write-chan@g.us", path, "Notes", "- the demo moved to Friday")
     async with get_session() as session:
