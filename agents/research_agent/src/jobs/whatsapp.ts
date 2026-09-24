@@ -7,6 +7,7 @@ import { searchArxivMulti } from "../sources/arxiv.js";
 import { extractWhatsappTopics, assignCandidates } from "../relevance.js";
 import { fromHfPaper, fromArxivPaper, dedupeByUrl, type CandidateItem } from "../candidates.js";
 import { pushToProjectPage, pushToCommonPage, logPushes, type PushRecord } from "../pages.js";
+import { writeResearchDigest, type DigestFinding } from "../digestWriter.js";
 
 export async function runWhatsappJob(): Promise<void> {
   console.log("[job:whatsapp] Reading WhatsApp digest page...");
@@ -73,6 +74,23 @@ export async function runWhatsappJob(): Promise<void> {
   allPushes.push(...commonPushed);
   console.log(`[job:whatsapp]   +${commonPushed.length} -> ${config.lapis.commonResearchPagePath}`);
 
+  if (config.enableDigestWriter && assignments.length > 0) {
+    const defaultTopic = topics[0] ?? "AI/ML";
+    const findings: DigestFinding[] = assignments.map((a) => {
+      const topic = a.projectPath
+        ? a.projectPath.replace(config.lapis.projectsPrefix, "").replace(/\.md$/, "")
+        : defaultTopic;
+
+      return {
+        candidate: a.candidate,
+        topic,
+        depth: "deep",
+      };
+    });
+
+    await writeResearchDigest(findings);
+  }
+  
   // Mark exactly what was actually written (not just "judged relevant") as
   // pushed, so a paper a project page already had (e.g. added by a human)
   // doesn't wrongly get remembered as agent-pushed.
