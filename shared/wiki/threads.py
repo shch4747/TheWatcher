@@ -278,18 +278,19 @@ class ThreadStore:
             content = dump_page(thread.page) if thread.page else ""
             target = f"{archive_dir(self.channel)}/{thread.slug}.md"
             try:
-                result = await self.vault.create(target, content)
+                created = await self.vault.create(target, content)
+                revision = created.revision
             except PageExists:
                 existing = await read_if_exists(self.vault, target)
                 if existing is None or existing.content != content:
                     logger.warning(
-                        "not archiving %s: %s already exists with different content", thread.path, target
+                        "not archiving %s: %s already exists with different content", thread
                     )
                     continue
-                result = existing
+                revision = existing.revision
             await self.vault.delete(thread.path)
             del (await self._live())[thread.slug]
-            moved = _to_thread(target, content, result.revision, archived=True)
+            moved = _to_thread(target, content, revision, archived=True)
             if moved is not None:
                 (await self._archive())[moved.slug] = moved
             archived.append(thread.slug)

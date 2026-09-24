@@ -21,11 +21,15 @@ export const config = {
   localMode,
   localOutputDir: optional("LOCAL_OUTPUT_DIR", "./local-output"),
 
+  enableDigestWriter: optional("ENABLE_DIGEST_WRITER", "false").toLowerCase() === "true",
+
   lapis: {
     baseUrl: (localMode ? optional("LAPIS_BASE_URL") : required("LAPIS_BASE_URL")).replace(/\/$/, ""),
     vaultId: localMode ? optional("LAPIS_VAULT_ID") : required("LAPIS_VAULT_ID"),
     bearerToken: optional("LAPIS_BEARER_TOKEN"),
     sessionCookie: optional("LAPIS_SESSION_COOKIE"),
+
+    digestPrefix: optional("LAPIS_DIGEST_PREFIX", "research/digests/"),
 
     // Where project notes live (job 2 reads all of these; jobs 1 & 2 both
     // append matched papers into the individual project's own page). In
