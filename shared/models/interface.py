@@ -19,7 +19,14 @@ from shared.models.decision import (
 )
 from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult, StructuredResult, TextResult
 from shared.models.skill_loader import Skill, load_skills, load_skills_from_dir, parse_skill_md
-from shared.models.text import TextModelClient, client_for_model, mentor_model, worker_model
+from shared.models.text import (
+    TextModelClient,
+    assignment_model,
+    client_for_model,
+    mentor_model,
+    wa_worker_model,
+    worker_model,
+)
 from shared.models.tokens import estimate_tokens
 
 
@@ -75,6 +82,8 @@ __all__ = [
     "TextModelClient",
     "client_for_model",
     "worker_model",
+    "wa_worker_model",
+    "assignment_model",
     "mentor_model",
     "log_model_call",
     "generate",

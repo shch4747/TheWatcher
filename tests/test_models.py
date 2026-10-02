@@ -125,6 +125,42 @@ def test_default_decision_client_picks_worker_backed_without_jev(monkeypatch: py
     assert isinstance(client, WorkerBackedDecisionModel)
 
 
+def test_wa_worker_asks_glm_for_low_reasoning_effort(monkeypatch: pytest.MonkeyPatch):
+    from shared.config import settings
+    from shared.models.interface import wa_worker_model, worker_model
+
+    monkeypatch.setattr(settings, "worker_model_name", "z-ai/glm-5.3-flash")
+    monkeypatch.setattr(settings, "models_api_key", "test-key")
+    wa = wa_worker_model()
+    assert wa.model_settings == {"extra_body": {"reasoning": {"effort": "low"}}}
+    assert worker_model().model_settings is None
+
+
+def test_assignment_model_is_deepseek_with_reasoning_off(monkeypatch: pytest.MonkeyPatch):
+    from shared.config import settings
+    from shared.models.interface import assignment_model
+
+    monkeypatch.setattr(settings, "ingest_model_name", None)
+    monkeypatch.setattr(settings, "assignment_model_name", "deepseek/deepseek-v4-flash")
+    monkeypatch.setattr(settings, "models_api_key", "test-key")
+    client = assignment_model()
+    assert client.model_name == "deepseek/deepseek-v4-flash"
+    assert client.model_settings == {"extra_body": {"reasoning": {"enabled": False}}}
+
+
+def test_ingest_model_name_overrides_assignment_and_skips_the_disable_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from shared.config import settings
+    from shared.models.interface import assignment_model
+
+    monkeypatch.setattr(settings, "ingest_model_name", "z-ai/glm-5.3-flash")
+    monkeypatch.setattr(settings, "models_api_key", "test-key")
+    client = assignment_model()
+    assert client.model_name == "z-ai/glm-5.3-flash"
+    assert client.model_settings is None
+
+
 def test_default_decision_client_picks_jev_when_api_key_set(monkeypatch: pytest.MonkeyPatch):
     from shared.config import settings
     from shared.models.decision import JevClient

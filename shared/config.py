@@ -45,7 +45,11 @@ class Settings(BaseSettings):
     # estimated tokens (shared.models.tokens) or this many messages.
     ingest_max_prompt_tokens: int = 12000
     ingest_max_messages_per_call: int = 40
-    # Model for the assignment + thread-update calls; None = the Worker.
+    # Assignment reads a whole chunk and returns JSON. DeepSeek V4 Flash
+    # can turn reasoning off, which is what makes that call cheap.
+    # Thread pages stay on the Worker. INGEST_MODEL_NAME overrides just
+    # the assignment model.
+    assignment_model_name: str = "deepseek/deepseek-v4-flash"
     ingest_model_name: str | None = None
     thread_stale_days: float = 3.0
     thread_silent_days: float = 7.0

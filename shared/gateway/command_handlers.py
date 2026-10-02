@@ -93,6 +93,9 @@ async def health(runtime: GatewayRuntime) -> str:
         decision_line = "decision model: Worker-backed (no JEV_API_KEY)"
     lines.append(decision_line)
     lines.append(f"worker model: {settings.worker_model_name}")
+    lines.append(
+        f"assignment model: {settings.ingest_model_name or settings.assignment_model_name}"
+    )
     lines.append(f"mentor model: {settings.mentor_model_name}")
 
     admin_count, channel_count = await admin_and_channel_counts()

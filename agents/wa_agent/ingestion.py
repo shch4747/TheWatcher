@@ -292,7 +292,7 @@ class IngestionPipeline:
         self, store, names, key, bucket, new_threads
     ) -> tuple[StoredThread, bool, bool]:
         if key.startswith(f"{NEW_THREAD}:"):
-            revision = await revise_thread(self.assign_client, bucket, names, minted=new_threads[key])
+            revision = await revise_thread(self.worker_client, bucket, names, minted=new_threads[key])
             thread = await store.create(
                 ThreadDraft(
                     title=revision.title,
@@ -306,7 +306,7 @@ class IngestionPipeline:
                 )
             )
             return thread, True, False
-        revision = await revise_thread(self.assign_client, bucket, names, current=await store.get(key))
+        revision = await revise_thread(self.worker_client, bucket, names, current=await store.get(key))
         thread, revived = await store.revise(
             key,
             ThreadChange(

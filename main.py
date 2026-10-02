@@ -23,7 +23,6 @@ from agents.wa_agent.interface import (
     run_lifecycle_for_channel,
     sunday_stale_nudge,
 )
-from shared.config import settings
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
 from shared.gateway.interface import (
@@ -35,7 +34,7 @@ from shared.gateway.interface import (
     register_reaction_hook,
 )
 from shared.inbox.interface import register_consumer
-from shared.models.interface import client_for_model, worker_model
+from shared.models.interface import assignment_model, wa_worker_model, worker_model
 from shared.observability.interface import ingest_run, setup_tracing
 from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, request_run, run_job
 from shared.wiki.interface import default_vault_client
@@ -108,12 +107,12 @@ class WatcherApplication:
         register_consumer("project_agent", lambda: request_run("project_agent_tick"))
 
     async def _chat_hook(self, message: InboundMessage) -> None:
-        await handle_chat_message(message, worker_model(), default_vault_client())
+        await handle_chat_message(message, wa_worker_model(), default_vault_client())
 
     async def _ingest_tick(self, force: bool = False) -> None:
         vault = default_vault_client()
-        worker = worker_model()
-        assign_client = client_for_model(settings.ingest_model_name) if settings.ingest_model_name else None
+        worker = wa_worker_model()
+        assign_client = assignment_model()
         async with ingest_run(forced=force) as run:
             for channel in await list_channels():
                 async with run.channel(channel):

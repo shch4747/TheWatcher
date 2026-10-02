@@ -14,6 +14,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.output import PromptedOutput
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 
 from shared.config import settings
 from shared.models.schemas import StructuredResult, TextResult
@@ -31,9 +32,14 @@ class TextModelClient:
     `pydantic_ai.models.test.TestModel()` instead of a live provider
     (Testing Decisions: "Worker/Mentor outputs as stored text")."""
 
-    def __init__(self, model: Model | str, model_name: str):
+    def __init__(
+        self, model: Model | str, model_name: str, model_settings: ModelSettings | None = None
+    ):
         self._model = model
-        self._agent: Agent[None, str] = Agent(model, output_type=str, retries=STRUCTURED_RETRIES)
+        self.model_settings = model_settings
+        self._agent: Agent[None, str] = Agent(
+            model, output_type=str, retries=STRUCTURED_RETRIES, model_settings=model_settings
+        )
         self.model_name = model_name
 
     async def generate(self, prompt: str, system: str | None = None) -> TextResult:
@@ -66,6 +72,7 @@ class TextModelClient:
             deps_type=deps_type,
             tools=list(tools),
             retries=STRUCTURED_RETRIES,
+            model_settings=self.model_settings,
         )
         result = await agent.run(prompt, deps=deps, instructions=system)
         usage = result.usage
@@ -105,14 +112,47 @@ def openrouter_model(model_name: str) -> OpenAIChatModel:
     return OpenAIChatModel(model_name, provider=provider)
 
 
-def client_for_model(model_name: str) -> TextModelClient:
+def client_for_model(
+    model_name: str, model_settings: ModelSettings | None = None
+) -> TextModelClient:
     """Any OpenRouter-style model id -> a ready TextModelClient. Used by
     the Phase 6 benchmark script to try several candidates side by side."""
-    return TextModelClient(openrouter_model(model_name), model_name)
+    return TextModelClient(openrouter_model(model_name), model_name, model_settings=model_settings)
+
+
+def glm_low_effort_settings(model_name: str) -> ModelSettings | None:
+    """GLM 5.3 cannot turn reasoning off. `low` is the smallest effort
+    OpenRouter accepts; anything else on that family is left alone."""
+    if model_name.startswith("z-ai/glm-5.3"):
+        return {"extra_body": {"reasoning": {"effort": "low"}}}
+    return None
+
+
+def deepseek_reasoning_off_settings(model_name: str) -> ModelSettings | None:
+    """DeepSeek V4 Flash reasons unless the request disables it. The
+    assignment default is that model; an override that is not it does
+    not get the flag (GLM rejects `enabled: false`)."""
+    if model_name.startswith("deepseek/deepseek-v4-flash"):
+        return {"extra_body": {"reasoning": {"enabled": False}}}
+    return None
 
 
 def worker_model() -> TextModelClient:
     return client_for_model(settings.worker_model_name)
+
+
+def wa_worker_model() -> TextModelClient:
+    """The Worker the WhatsApp agent calls (chat and thread pages).
+    GLM runs at low reasoning effort; other worker ids are unchanged."""
+    name = settings.worker_model_name
+    return client_for_model(name, glm_low_effort_settings(name))
+
+
+def assignment_model() -> TextModelClient:
+    """The model that assigns messages to threads. DeepSeek V4 Flash
+    with reasoning off, unless `INGEST_MODEL_NAME` overrides it."""
+    name = settings.ingest_model_name or settings.assignment_model_name
+    return client_for_model(name, deepseek_reasoning_off_settings(name))
 
 
 def mentor_model() -> TextModelClient:
