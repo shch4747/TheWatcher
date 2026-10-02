@@ -86,6 +86,23 @@ async def test_hook_does_not_fire_for_admin_command(client: httpx.AsyncClient):
     assert seen == []
 
 
+async def test_racing_duplicate_does_not_500(client: httpx.AsyncClient):
+    import asyncio
+
+    await _allowlist("hook-chan-race@g.us")
+    body = json.dumps(message_event("hk-race", "hook-chan-race@g.us", "hi")).encode()
+    headers = {"X-Hub-Signature-256": _sign(body)}
+    async with client as c:
+        first, second = await asyncio.gather(
+            c.post("/webhook/gowa", content=body, headers=headers),
+            c.post("/webhook/gowa", content=body, headers=headers),
+        )
+    statuses = {first.status_code, second.status_code}
+    assert statuses <= {200, 400}
+    assert 200 in statuses
+    assert 500 not in statuses
+
+
 async def test_hook_does_not_fire_for_duplicate_message(client: httpx.AsyncClient):
     seen = []
 

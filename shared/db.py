@@ -58,6 +58,16 @@ class Channel(Base):
     cursor: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class AppSetting(Base):
+    """Process flags a Bot Admin can flip at runtime. A missing key is the
+    default (the chat agent stays off until `/toggle-agent`)."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(String)
+
+
 class BotAdmin(Base):
     """Bot Admins can /setup before a channel is allowlisted (Spec: Gateway
     edge filtering lets admin commands through pre-allowlist)."""

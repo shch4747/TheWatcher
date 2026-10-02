@@ -37,6 +37,16 @@ class IngestCommand:
 
 
 @dataclass(frozen=True)
+class ToggleAgentCommand:
+    pass
+
+
+@dataclass(frozen=True)
+class HelpCommand:
+    pass
+
+
+@dataclass(frozen=True)
 class LinkCommand:
     sender_ref: str
     member_ref: str
@@ -55,6 +65,8 @@ Command = (
     | HealthCommand
     | ChannelsCommand
     | IngestCommand
+    | ToggleAgentCommand
+    | HelpCommand
 )
 
 _SETUP_RE = re.compile(
@@ -67,6 +79,8 @@ _LINK_RE = re.compile(r"^/link\s+(?P<sender>\S+)\s+(?P<member>\[\[[^\]]+\]\])\s*
 _HEALTH_RE = re.compile(r"^/health\s*$", re.IGNORECASE)
 _CHANNELS_RE = re.compile(r"^/channels\s*$", re.IGNORECASE)
 _INGEST_RE = re.compile(r"^/ingest\s*$", re.IGNORECASE)
+_TOGGLE_AGENT_RE = re.compile(r"^/toggle-agent\s*$", re.IGNORECASE)
+_HELP_RE = re.compile(r"^/help\s*$", re.IGNORECASE)
 
 
 def parse_command(text: str) -> Command | None:
@@ -90,6 +104,10 @@ def parse_command(text: str) -> Command | None:
         return ChannelsCommand()
     if _INGEST_RE.match(text):
         return IngestCommand()
+    if _TOGGLE_AGENT_RE.match(text):
+        return ToggleAgentCommand()
+    if _HELP_RE.match(text):
+        return HelpCommand()
     return None
 
 

@@ -8,6 +8,7 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from shared.config import settings
 from shared.db import MessageBuffer, get_session
@@ -79,7 +80,11 @@ async def receive_webhook(raw_body: bytes, signature: str | None, runtime: Gatew
             payload=raw_body.decode(),
         )
         session.add(buffered)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return False
 
     if is_admin_command:
         await _dispatch_admin_command(runtime, channel, event.sender, event.text, buffered.id)

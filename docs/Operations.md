@@ -87,6 +87,10 @@ process start, so `docker compose up -d` after editing it is enough.
   proactively any time, from your phone.
 - `/link <wa-jid> [[Member Title]]` - manually link a WhatsApp identity
   to a Members Registry page, bypassing fuzzy-match Proposals.
+- `/toggle-agent` - switch chat replies on or off. Off until the first
+  toggle, including after a fresh database. Ingest and the other
+  commands keep working either way.
+- `/help` - list the commands above and whether the chat agent is on.
 
 ## Finding out about a failed scheduled job
 

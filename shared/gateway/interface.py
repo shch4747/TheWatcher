@@ -6,6 +6,7 @@ hook lists for the process.
 """
 from __future__ import annotations
 
+from shared.gateway.agent_switch import chat_agent_enabled as chat_agent_enabled
 from shared.gateway.buffer import InboundMessage as InboundMessage
 from shared.gateway.buffer import get_context as get_context
 from shared.gateway.buffer import get_message as get_message
@@ -131,6 +132,7 @@ __all__ = [
     "register_health_line",
     "clear_hooks",
     "verify_signature",
+    "chat_agent_enabled",
     "is_bot_admin",
     "is_bot_outbound",
     "get_channel",

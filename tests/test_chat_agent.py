@@ -40,6 +40,13 @@ class EchoWorker(TextModelClient):
 
 
 @pytest.fixture(autouse=True)
+async def _chat_agent_on():
+    from shared.gateway.agent_switch import set_chat_agent_enabled
+
+    await set_chat_agent_enabled(True)
+
+
+@pytest.fixture(autouse=True)
 def _wire_fake_gowa(monkeypatch):
     fake_transport = ASGITransport(app=fake_gowa_app)
     fake_client = httpx.AsyncClient(transport=fake_transport, base_url="http://fake-gowa")
@@ -83,6 +90,17 @@ async def _buffer(
 
 async def test_non_addressed_message_is_ignored(vault: LocalDirClient):
     reply = await wa_agent.handle_chat_message(_message("just chatting", "m1"), EchoWorker(), vault)
+    assert reply is None
+    assert fake_gowa_app.state.sent_messages == []
+
+
+async def test_mention_is_ignored_when_chat_agent_is_off(vault: LocalDirClient):
+    from shared.gateway.agent_switch import set_chat_agent_enabled
+
+    await set_chat_agent_enabled(False)
+    reply = await wa_agent.handle_chat_message(
+        _message("@watcher who owns the hall booking?", "q-off"), EchoWorker(), vault
+    )
     assert reply is None
     assert fake_gowa_app.state.sent_messages == []
 

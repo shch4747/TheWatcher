@@ -21,10 +21,12 @@ from shared.gateway.app import app as gateway_app
 from shared.gateway.commands import (
     ChannelsCommand,
     HealthCommand,
+    HelpCommand,
     IngestCommand,
     LinkCommand,
     SetupCommand,
     StatusCommand,
+    ToggleAgentCommand,
     UnwatchCommand,
     parse_command,
 )
@@ -79,6 +81,8 @@ def test_parse_command_recognizes_all_shapes():
     assert parse_command("/health") == HealthCommand()
     assert parse_command("/channels") == ChannelsCommand()
     assert parse_command("/ingest") == IngestCommand()
+    assert parse_command("/toggle-agent") == ToggleAgentCommand()
+    assert parse_command("/help") == HelpCommand()
     assert parse_command("/unwatch 111-aaa@g.us") == UnwatchCommand(jid="111-aaa@g.us")
     assert parse_command("not a command") is None
 
@@ -277,6 +281,50 @@ async def test_ingest_command_reports_unregistered_job_cleanly(vault: LocalDirCl
 async def test_ingest_command_refuses_non_admin():
     reply = await gateway.trigger_ingest("918888888888@s.whatsapp.net")
     assert "only bot admins" in reply.lower()
+
+
+async def test_chat_agent_is_off_until_toggled(vault: LocalDirClient):
+    from shared.gateway.agent_switch import chat_agent_enabled, set_chat_agent_enabled
+
+    await set_chat_agent_enabled(False)
+    assert await chat_agent_enabled() is False
+
+    turned_on = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/toggle-agent", vault)
+    assert turned_on == "Chat agent is on."
+    assert await chat_agent_enabled() is True
+
+    turned_off = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/toggle-agent", vault)
+    assert turned_off == "Chat agent is off."
+    assert await chat_agent_enabled() is False
+
+
+async def test_toggle_agent_refuses_non_admin(vault: LocalDirClient):
+    reply = await gateway.handle_command(
+        PROJECT_GROUP, "918888888888@s.whatsapp.net", "/toggle-agent", vault
+    )
+    assert reply is not None
+    assert "only bot admins" in reply.lower()
+
+
+async def test_help_lists_commands_and_agent_state(vault: LocalDirClient):
+    from shared.gateway.agent_switch import set_chat_agent_enabled
+
+    await set_chat_agent_enabled(False)
+    reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/help", vault)
+    assert reply is not None
+    listed = (
+        "/setup",
+        "/channels",
+        "/unwatch",
+        "/status",
+        "/ingest",
+        "/health",
+        "/link",
+        "/toggle-agent",
+    )
+    for command in listed:
+        assert command in reply
+    assert "Chat agent is off." in reply
 
 
 async def _clear_singleton_channel(kind: str) -> None:

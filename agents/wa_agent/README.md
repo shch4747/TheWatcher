@@ -29,7 +29,8 @@ ADR-0003).
   skills.
 - `revise.py` — title/summary guards and the thread-update orchestration.
 - `chat.py` — trigger is an @mention (`@watcher` or WhatsApp's
-  `@<bot number>`) or a reply to one of the bot's own messages. Context
+  `@<bot number>`) or a reply to one of the bot's own messages. Replies
+  stay off until a Bot Admin sends `/toggle-agent`. Context
   is the last 5 messages plus any message those five reply to.
   Read-only wiki tools (list this channel's threads, search, read a
   page) when that isn't enough. Media-only mentions and replies get a

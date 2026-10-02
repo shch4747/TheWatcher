@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 
 from shared.config import settings
+from shared.gateway.agent_switch import chat_agent_enabled, toggle_chat_agent
 from shared.gateway.channels import (
     admin_and_channel_counts,
     get_channel,
@@ -15,10 +16,12 @@ from shared.gateway.commands import (
     ChannelsCommand,
     Command,
     HealthCommand,
+    HelpCommand,
     IngestCommand,
     LinkCommand,
     SetupCommand,
     StatusCommand,
+    ToggleAgentCommand,
     UnwatchCommand,
     parse_command,
 )
@@ -33,6 +36,20 @@ from shared.scheduler.interface import due_jobs, ledger_tail, registered_jobs, r
 from shared.wiki.interface import LapisClient, VaultClient, check_vault_connection, default_vault_client
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+_HELP = "\n".join(
+    [
+        "*Commands*",
+        "/setup [project|event|coordis|exes|research|all|other|logs] [Title] — watch this group",
+        "/channels — list watched channels",
+        "/unwatch [jid] — stop watching this group, or another by jid",
+        "/status — this channel's kind, initiative, and cursor",
+        "/ingest — process unprocessed messages now, ignoring batch limits",
+        "/health — connectivity and the last outcome of each job",
+        "/link <wa-jid> [[Member Title]] — link a WhatsApp identity to a member",
+        "/toggle-agent — turn chat replies on or off",
+    ]
+)
 
 
 def _isoformat(dt: datetime | None) -> str:
@@ -74,6 +91,20 @@ async def trigger_ingest(requested_by: str) -> str:
     return f"Ingestion failed: {result.error}"
 
 
+async def toggle_agent(requested_by: str) -> str:
+    if not await is_bot_admin(requested_by):
+        return "Only Bot Admins can /toggle-agent."
+    enabled = await toggle_chat_agent()
+    return "Chat agent is on." if enabled else "Chat agent is off."
+
+
+async def help_text(requested_by: str) -> str:
+    if not await is_bot_admin(requested_by):
+        return "Only Bot Admins can /help."
+    state = "on" if await chat_agent_enabled() else "off"
+    return f"{_HELP}\n\nChat agent is {state}."
+
+
 async def health(runtime: GatewayRuntime) -> str:
     lines = ["*Watcher health*"]
 
@@ -107,6 +138,7 @@ async def health(runtime: GatewayRuntime) -> str:
     admin_count, channel_count = await admin_and_channel_counts()
     due = await due_jobs()
     lines.append(f"bot admins: {admin_count}  watched channels: {channel_count}")
+    lines.append(f"chat agent: {'on' if await chat_agent_enabled() else 'off'}")
     lines.append(f"jobs due: {len(due)} {due if due else ''}".strip())
     for health_line in runtime.hooks.health_lines:
         try:
@@ -166,4 +198,8 @@ async def handle_command(
         return await channels_report(sender, runtime)
     if isinstance(cmd, IngestCommand):
         return await trigger_ingest(sender)
+    if isinstance(cmd, ToggleAgentCommand):
+        return await toggle_agent(sender)
+    if isinstance(cmd, HelpCommand):
+        return await help_text(sender)
     raise AssertionError(f"unhandled command type: {cmd!r}")

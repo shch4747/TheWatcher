@@ -14,6 +14,7 @@ from shared.config import settings
 from shared.gateway.interface import (
     InboundMessage,
     bot_jid,
+    chat_agent_enabled,
     get_channel,
     get_message,
     is_bot_outbound,
@@ -149,6 +150,8 @@ class ChatAgent:
         self.vault = vault
 
     async def handle(self, message: InboundMessage) -> str | None:
+        if not await chat_agent_enabled():
+            return None
         if message.from_me:
             return None
         addressed = mentions_bot(message, await bot_jid()) or await is_reply_to_bot(
