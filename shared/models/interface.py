@@ -14,8 +14,10 @@ from shared.models.decision import (
     DecisionModelProtocol,
     FixtureDecisionModel,
     JevClient,
+    OpenRouterJevClient,
     WorkerBackedDecisionModel,
     default_decision_client,
+    openrouter_jev_client,
 )
 from shared.models.schemas import ChoiceResult, NoulResult, ScoreResult, StructuredResult, TextResult
 from shared.models.skill_loader import Skill, load_skills, load_skills_from_dir, parse_skill_md
@@ -76,8 +78,10 @@ __all__ = [
     "StructuredResult",
     "DecisionModelProtocol",
     "JevClient",
+    "OpenRouterJevClient",
     "WorkerBackedDecisionModel",
     "default_decision_client",
+    "openrouter_jev_client",
     "FixtureDecisionModel",
     "TextModelClient",
     "client_for_model",

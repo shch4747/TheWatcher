@@ -372,6 +372,65 @@ def _validate_assignment(
     return problems
 
 
+class _Placement:
+    """Reply routing shared by structured assignment and the Jev router.
+
+    A reply to a message already on a thread page goes straight there.
+    A reply to a message in this same batch follows that message
+    wherever it lands. Everything else is left in `to_ask`."""
+
+    def __init__(self, messages: list[BufferedMessage]):
+        self.messages = messages
+        self.result = AssignmentResult()
+        self.already_assigned: list[tuple[BufferedMessage, str]] = []
+        self.to_ask: list[BufferedMessage] = []
+        self.followers: dict[str, list[BufferedMessage]] = {}
+        self.order = {m.message_id: i for i, m in enumerate(messages)}
+        self._in_batch: dict[str, BufferedMessage] = {
+            src_id: m for m in messages for src_id in m.src_ids
+        }
+        self._placed: dict[str, str] = {}
+
+    def put(self, message: BufferedMessage, key: str) -> None:
+        """Place a message, then place anything that replied to it."""
+        pending = [message]
+        while pending:
+            current = pending.pop()
+            self.result.buckets.setdefault(key, []).append(current)
+            for src_id in current.src_ids:
+                self._placed[src_id] = key
+                pending.extend(self.followers.pop(src_id, []))
+
+    def finish(self) -> AssignmentResult:
+        # Replies are placed out of order (pass 1 ahead of the model's
+        # answers, followers after their parent), so restore batch order
+        # per bucket - Timeline lines are appended in bucket order.
+        for bucket in self.result.buckets.values():
+            bucket.sort(key=lambda m: self.order[m.message_id])
+        return self.result
+
+    async def route_replies(
+        self, find_thread_for_reply: Callable[[str], Awaitable[ThreadInfo | None]]
+    ) -> None:
+        for message in self.messages:
+            target = message.replied_to_id
+            if target and target in self._placed:
+                key = self._placed[target]
+                self.put(message, key)
+                self.already_assigned.append((message, key))
+                continue
+            if target and target in self._in_batch and self._in_batch[target] is not message:
+                self.followers.setdefault(target, []).append(message)
+                continue
+            if target:
+                found = await find_thread_for_reply(target)
+                if found is not None:
+                    self.put(message, found.slug)
+                    self.already_assigned.append((message, found.slug))
+                    continue
+            self.to_ask.append(message)
+
+
 async def assign_batch(
     messages: list[BufferedMessage],
     threads: list[ThreadInfo],
@@ -386,57 +445,14 @@ async def assign_batch(
     rest, chunk by chunk, folding each chunk's new threads into the
     next chunk's context. `find_thread_for_reply(src_id)` resolves a
     quoted message id against persisted thread pages."""
-    result = AssignmentResult()
-    already_assigned: list[tuple[BufferedMessage, str]] = []
-    to_ask: list[BufferedMessage] = []
-    # A reply whose target is *also* in this batch can't be placed until
-    # the target is: it follows its parent wherever the model puts it.
-    followers: dict[str, list[BufferedMessage]] = {}
-    order = {m.message_id: i for i, m in enumerate(messages)}
-    in_batch: dict[str, BufferedMessage] = {
-        src_id: m for m in messages for src_id in m.src_ids
-    }
-
-    placed: dict[str, str] = {}  # src id -> its bucket key, once decided
-
-    def _put(m: BufferedMessage, key: str) -> None:
-        """Place a message, then place anything that replied to it."""
-        pending = [m]
-        while pending:
-            current = pending.pop()
-            result.buckets.setdefault(key, []).append(current)
-            for src_id in current.src_ids:
-                placed[src_id] = key
-                pending.extend(followers.pop(src_id, []))
-
-    def _finish() -> AssignmentResult:
-        # Replies are placed out of order (pass 1 ahead of the model's
-        # answers, followers after their parent), so restore batch order
-        # per bucket - Timeline lines are appended in bucket order.
-        for bucket in result.buckets.values():
-            bucket.sort(key=lambda m: order[m.message_id])
-        return result
-
-    # Pass 1: replies. A reply to a message already on a thread page
-    # goes straight there; a reply to a message in this same batch is
-    # parked as that message's follower; everything else is asked about.
-    for m in messages:
-        target = m.replied_to_id
-        if target and target in placed:
-            key = placed[target]
-            _put(m, key)
-            already_assigned.append((m, key))
-            continue
-        if target and target in in_batch and in_batch[target] is not m:
-            followers.setdefault(target, []).append(m)
-            continue
-        if target:
-            found = await find_thread_for_reply(target)
-            if found is not None:
-                _put(m, found.slug)
-                already_assigned.append((m, found.slug))
-                continue
-        to_ask.append(m)
+    placement = _Placement(messages)
+    await placement.route_replies(find_thread_for_reply)
+    result = placement.result
+    already_assigned = placement.already_assigned
+    to_ask = placement.to_ask
+    followers = placement.followers
+    _put = placement.put
+    _finish = placement.finish
 
     if not to_ask:
         return _finish()

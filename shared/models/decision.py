@@ -176,6 +176,100 @@ class WorkerBackedDecisionModel:
         return ScoreResult(value=value)
 
 
+def openrouter_api_root(models_base_url: str) -> str:
+    """Chat completions live at `{root}/v1`. The TypeSafe SDK appends
+    `/v1/systemone` itself, so the root is the OpenRouter API host
+    without that suffix."""
+    base = models_base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    return base
+
+
+class OpenRouterJevClient:
+    """Jev Latest on OpenRouter (`~typesafe/jev-latest`), billed to
+    `MODELS_API_KEY`. One `system_one` request can carry every message
+    in a chunk as its own Choice question. The hosted TypeSafe client
+    (`JevClient`) is unchanged and still serves the Chat Agent."""
+
+    def __init__(self, api_key: str, base_url: str, model: str):
+        self.model_name = model
+        self._base_url = base_url
+        self._client = AsyncTypeSafeClient(api_key=api_key, base_url=base_url, model=model)
+
+    async def choice_batch(
+        self,
+        state: str,
+        questions: dict[str, tuple[str, dict[str, str | None]]],
+    ) -> dict[str, ChoiceResult]:
+        """`questions` maps a message id to `(instructions, criteria)`."""
+        from types import SimpleNamespace
+
+        from shared.models.calls import log_model_call
+        from shared.observability.interface import ERROR, REPORTED, resolve_cost
+
+        started = time.monotonic()
+        payload = {
+            name: Choice(instructions=instructions, criteria=criteria)
+            for name, (instructions, criteria) in questions.items()
+        }
+        try:
+            response = await self._client.system_one(state=state, questions=payload, model=self.model_name)
+        except Exception as exc:
+            await log_model_call(
+                "decision", self.model_name, 0, 0,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                outcome=ERROR, error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        tokens_in = response.usage.input_tokens or 0
+        tokens_out = response.usage.output_tokens or 0
+        cost = _openrouter_cost(response)
+        if cost is not None:
+            cost_usd, cost_source = cost, REPORTED
+        else:
+            usage = SimpleNamespace(input_tokens=tokens_in, output_tokens=tokens_out, cost=None)
+            cost_usd, cost_source = resolve_cost(usage, self.model_name, self._base_url)
+        await log_model_call(
+            "decision", self.model_name, tokens_in, tokens_out,
+            cost_usd=cost_usd, cost_source=cost_source,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
+        return {
+            name: ChoiceResult(option=answer.choice, probabilities=dict(answer.probabilities))
+            for name, answer in response.choices.items()
+        }
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+def _openrouter_cost(response: object) -> float | None:
+    """OpenRouter puts `usage.cost` on the body. The SDK's Usage model
+    drops that field, so read it off the raw response when it is there."""
+    raw = getattr(response, "raw_http_response", None)
+    if raw is None:
+        return None
+    try:
+        body = raw.json()
+        cost = body.get("usage", {}).get("cost") if isinstance(body, dict) else None
+        return float(cost) if cost is not None else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def openrouter_jev_client() -> OpenRouterJevClient:
+    from shared.config import settings
+
+    if not settings.models_api_key:
+        raise RuntimeError("ASSIGNMENT_MODE=jev needs MODELS_API_KEY")
+    return OpenRouterJevClient(
+        api_key=settings.models_api_key,
+        base_url=openrouter_api_root(settings.models_base_url),
+        model=settings.openrouter_jev_model,
+    )
+
+
 def default_decision_client(worker_client: TextModelClient) -> DecisionModelProtocol:
     """JevClient if JEV_API_KEY is configured, else the Worker-backed
     fallback - the same choice `shared.cms.interface.default_cms_client()`

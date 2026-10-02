@@ -23,6 +23,7 @@ from agents.wa_agent.interface import (
     run_lifecycle_for_channel,
     sunday_stale_nudge,
 )
+from shared.config import settings
 from shared.db import init_db
 from shared.gateway.app import app as fastapi_app
 from shared.gateway.interface import (
@@ -34,7 +35,12 @@ from shared.gateway.interface import (
     register_reaction_hook,
 )
 from shared.inbox.interface import register_consumer
-from shared.models.interface import assignment_model, wa_worker_model, worker_model
+from shared.models.interface import (
+    assignment_model,
+    openrouter_jev_client,
+    wa_worker_model,
+    worker_model,
+)
 from shared.observability.interface import ingest_run, setup_tracing
 from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, request_run, run_job
 from shared.wiki.interface import default_vault_client
@@ -113,12 +119,18 @@ class WatcherApplication:
         vault = default_vault_client()
         worker = wa_worker_model()
         assign_client = assignment_model()
+        decider = openrouter_jev_client() if settings.assignment_mode == "jev" else None
         async with ingest_run(forced=force) as run:
             for channel in await list_channels():
                 async with run.channel(channel):
                     run.record(
                         await run_batch(
-                            channel.jid, vault, worker, force=force, assign_client=assign_client
+                            channel.jid,
+                            vault,
+                            worker,
+                            force=force,
+                            assign_client=assign_client,
+                            decider=decider,
                         )
                     )
         report = run.report()

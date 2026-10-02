@@ -24,6 +24,7 @@ from shared.models.interface import TextModelClient
 from shared.wiki.interface import StoredThread, ThreadChange, ThreadDraft, ThreadStore, VaultClient
 
 from agents.wa_agent.assign import CHATTER, NEW_THREAD, SenderNames, assign_batch
+from agents.wa_agent.assign_jev import ThreadDecider, assign_with_jev
 from agents.wa_agent.messages import BufferedMessage, ThreadInfo
 from agents.wa_agent.revise import revise_thread
 
@@ -196,10 +197,12 @@ class IngestionPipeline:
         vault: VaultClient,
         worker_client: TextModelClient,
         assign_client: TextModelClient | None = None,
+        decider: ThreadDecider | None = None,
     ) -> None:
         self.vault = vault
         self.worker_client = worker_client
         self.assign_client = assign_client or worker_client
+        self.decider = decider
 
     async def run_scheduled(
         self, channel_jid: str, now: datetime | None = None
@@ -241,16 +244,31 @@ class IngestionPipeline:
             return thread_info(thread) if thread else None
 
         channel_title = channel.title or channel.jid
-        assignment = await assign_batch(
-            merged_messages,
-            open_threads,
-            self.assign_client,
-            names,
-            channel_title,
-            channel.kind,
-            channel.initiative,
-            _find_for_reply,
-        )
+        if settings.assignment_mode == "jev":
+            if self.decider is None:
+                raise RuntimeError("assignment_mode is jev but no Jev client was wired")
+            assignment = await assign_with_jev(
+                merged_messages,
+                open_threads,
+                self.worker_client,
+                names,
+                channel_title,
+                channel.kind,
+                channel.initiative,
+                _find_for_reply,
+                self.decider,
+            )
+        else:
+            assignment = await assign_batch(
+                merged_messages,
+                open_threads,
+                self.assign_client,
+                names,
+                channel_title,
+                channel.kind,
+                channel.initiative,
+                _find_for_reply,
+            )
         if assignment.unassigned:
             await notify_logs(
                 f"⚠️ ingest: {assignment.unassigned} message(s) in {channel_title} could not be "
@@ -329,9 +347,10 @@ async def run_batch(
     now: datetime | None = None,
     force: bool = False,
     assign_client: TextModelClient | None = None,
+    decider: ThreadDecider | None = None,
 ) -> BatchResult | None:
     """Compatibility wrapper. Prefer `IngestionPipeline.run_scheduled` / `run_forced`."""
-    pipeline = IngestionPipeline(vault, worker_client, assign_client)
+    pipeline = IngestionPipeline(vault, worker_client, assign_client, decider)
     if force:
         return await pipeline.run_forced(channel_jid)
     return await pipeline.run_scheduled(channel_jid, now)

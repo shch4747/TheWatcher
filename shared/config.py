@@ -1,6 +1,8 @@
 """Settings loaded from the environment. One place, per ADR-0005."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,6 +53,12 @@ class Settings(BaseSettings):
     # the assignment model.
     assignment_model_name: str = "deepseek/deepseek-v4-flash"
     ingest_model_name: str | None = None
+    # `structured` is the DeepSeek JSON assignment above. `jev` asks
+    # OpenRouter's Jev Latest one Choice per message; a new thread (or
+    # a choice below the confidence threshold) is handed to the Worker
+    # to name and group. The structured path stays either way.
+    assignment_mode: Literal["structured", "jev"] = "structured"
+    openrouter_jev_model: str = "~typesafe/jev-latest"
     thread_stale_days: float = 3.0
     thread_silent_days: float = 7.0
     lapis_base_url: str = "https://lapis.dvenom.in"
