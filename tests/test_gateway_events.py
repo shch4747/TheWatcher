@@ -44,6 +44,39 @@ def test_sender_name_is_none_when_gowa_sends_neither():
     assert event.sender_name is None
 
 
+def test_media_and_mentions_are_parsed_from_payload():
+    sticker = parse_gowa_event(
+        {
+            "event": "message",
+            "payload": {
+                "id": "s1",
+                "body": "",
+                "sticker": "statics/media/sticker.webp",
+                "mentions": ["watcher-bot@s.whatsapp.net"],
+            },
+        }
+    )
+    assert sticker.media_kind == "sticker"
+    assert sticker.text == ""
+    assert sticker.mentions == ("watcher-bot@s.whatsapp.net",)
+
+    image = parse_gowa_event(
+        {
+            "event": "message",
+            "payload": {
+                "id": "i1",
+                "body": "caption",
+                "image": "statics/media/pic.jpeg",
+                "is_from_me": True,
+            },
+        }
+    )
+    assert image.media_kind == "image"
+    assert image.text == "caption"
+    assert image.from_me is True
+    assert image.mentions == ()
+
+
 def test_parse_gowa_timestamp_handles_rfc3339_epoch_and_junk():
     rfc = parse_gowa_timestamp("2026-09-18T10:30:00Z")
     assert rfc == datetime(2026, 9, 18, 10, 30, tzinfo=UTC)

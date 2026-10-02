@@ -35,7 +35,7 @@ from shared.gateway.interface import (
     register_reaction_hook,
 )
 from shared.inbox.interface import register_consumer
-from shared.models.interface import client_for_model, default_decision_client, worker_model
+from shared.models.interface import client_for_model, worker_model
 from shared.observability.interface import ingest_run, setup_tracing
 from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, request_run, run_job
 from shared.wiki.interface import default_vault_client
@@ -108,9 +108,7 @@ class WatcherApplication:
         register_consumer("project_agent", lambda: request_run("project_agent_tick"))
 
     async def _chat_hook(self, message: InboundMessage) -> None:
-        worker = worker_model()
-        decision = default_decision_client(worker)
-        await handle_chat_message(message, default_vault_client(), decision, worker)
+        await handle_chat_message(message, worker_model(), default_vault_client())
 
     async def _ingest_tick(self, force: bool = False) -> None:
         vault = default_vault_client()

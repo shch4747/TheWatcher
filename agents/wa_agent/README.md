@@ -1,7 +1,7 @@
 # WA Agent
 
 Ingestion (batch cutting, thread assignment, thread writing) and the Chat
-Agent (mention/reply handling, Proposal writes). See
+Agent (mention handling, Proposal writes). See
 [`docs/Spec - Watcher v1.md`](../../docs/Spec%20-%20Watcher%20v1.md)
 ("WhatsApp Agent — ingestion" / "— Chat Agent") and
 [`docs/Plan - Watcher v1.md`](../../docs/Plan%20-%20Watcher%20v1.md)
@@ -28,8 +28,11 @@ ADR-0003).
   loop and item rendering in `assign.py`. Prompts are constants, not
   skills.
 - `revise.py` — title/summary guards and the thread-update orchestration.
-- `chat.py` — mention/reply handling split into trigger detection, thread
-  resolution, read-answer, and write-proposal.
+- `chat.py` — mention-only trigger; context is the last 5 messages plus
+  any message those five reply to. Read-only wiki tools (list this
+  channel's threads, search, read a page) when that isn't enough.
+  Media-only mentions get a canned "can't see that" reply.
+- `wiki_tools.py` — the Chat Agent's read-only Lapis tools (no writes).
 - `lifecycle.py` — daily stale/archive pass and the Sunday nudge.
 - `proposals.py` — proposal lifecycle; persistence is `ProposalStore` on
   the Gateway interface, executors are one function per kind.

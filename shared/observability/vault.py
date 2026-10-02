@@ -1,24 +1,24 @@
 """Audit wrapper around the wiki client (ADR-0013): every change the
 agents make to Lapis gets a row in `obs_vault_ops`.
 
-Wrapping the five-method `VaultClient` protocol rather than editing call
+Wrapping the `VaultClient` protocol rather than editing call
 sites means this catches *every* mutation in the repo - the Gateway's
 `/setup` and proposal writes, the WA Agent's thread pages and archival
 deletes, the Project Agent's initiative writes - with no change to any
 of them, and it works for both `LapisClient` and `LocalDirClient`.
 
-`read`/`list` are pure reads and are not recorded; logging them would
-multiply the table by an order of magnitude for no audit value.
+`read`/`list`/`search` are pure reads and are not recorded; logging them
+would multiply the table by an order of magnitude for no audit value.
 """
 from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 
 from shared.observability.record import CONFLICT, ERROR, OK, record_vault_op
-from shared.wiki.interface import ConflictError, PageExists, ReadResult, VaultClient, WriteResult
+from shared.wiki.interface import ConflictError, PageExists, ReadResult, SearchHit, VaultClient, WriteResult
 
 
 class ObservedVaultClient:
@@ -40,6 +40,18 @@ class ObservedVaultClient:
 
     async def list(self, prefix: str) -> list[str]:
         return await self._inner.list(prefix)
+
+    async def search(
+        self,
+        pattern: str,
+        path: str | None = None,
+        limit: int = 40,
+        ignore_case: bool = True,
+        literal: bool = True,
+    ) -> Sequence[SearchHit]:
+        return await self._inner.search(
+            pattern, path=path, limit=limit, ignore_case=ignore_case, literal=literal
+        )
 
     async def create(self, path: str, content: str) -> WriteResult:
         return await self._observe("create", path, content, None, lambda: self._inner.create(path, content))

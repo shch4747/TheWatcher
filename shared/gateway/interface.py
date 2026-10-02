@@ -12,6 +12,7 @@ from shared.gateway.buffer import get_message as get_message
 from shared.gateway.buffer import get_messages as get_messages
 from shared.gateway.buffer import mark_consumed as mark_consumed
 from shared.gateway.buffer import pending_messages as pending_messages
+from shared.gateway.buffer import recent_messages as recent_messages
 from shared.gateway.channels import (
     advance_channel_cursor,
     get_channel,
@@ -151,6 +152,7 @@ __all__ = [
     "get_context",
     "get_message",
     "get_messages",
+    "recent_messages",
     "mark_consumed",
     "pending_messages",
     "SETUP_STEPS",

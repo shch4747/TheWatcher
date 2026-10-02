@@ -1,25 +1,48 @@
-"""Chat Agent: mention/reply-to-bot -> identify thread -> read or propose."""
+"""Chat Agent: @mention the bot -> last 5 messages plus their quoted
+replies -> a text answer, with read-only wiki tools if that isn't enough.
+
+No write-proposals, and a reply to a bot message does not trigger. A
+mention that is only media (sticker/image, no caption) gets a canned
+"I can't see that" text, not a model call.
+"""
 from __future__ import annotations
 
 import re
 
 from shared.config import settings
-from shared.gateway.interface import InboundMessage, get_channel, is_bot_outbound
-from shared.gateway.interface import send as gateway_send
-from shared.models.interface import DecisionModelProtocol, TextModelClient, decide_with_fallback, generate
+from shared.gateway.interface import (
+    InboundMessage,
+    get_channel,
+    get_message,
+    is_bot_outbound,
+    recent_messages,
+)
+from shared.gateway.interface import (
+    send as gateway_send,
+)
+from shared.models.interface import DecisionModelProtocol, TextModelClient, generate_with_tools
 from shared.observability.interface import CHAT, scope
-from shared.wiki.interface import ThreadStore, VaultClient
+from shared.wiki.interface import VaultClient
 
-from agents.wa_agent.ingestion import thread_info
-from agents.wa_agent.messages import ThreadInfo
-from agents.wa_agent.proposals import propose_wiki_write
+from agents.wa_agent.wiki_tools import read_only_wiki_tools
+
+CONTEXT_LIMIT = 5
+CANNOT_SEE_MEDIA = "I can't see stickers or images. Send a text message."
+_SYSTEM = (
+    "You are Watcher, a helpful assistant in a WhatsApp group. "
+    "Answer from the recent messages when they are enough. Be brief. "
+    "If that context is incomplete, look the answer up in the wiki: "
+    "start by listing this channel's threads, then search or read the "
+    "relevant pages. Do not search when the chat already answers it. "
+    "Never write to the wiki."
+)
 
 _MENTION_RE = re.compile(rf"@{re.escape(settings.bot_mention_name)}\b", re.IGNORECASE)
 _WRITE_VERBS_RE = re.compile(r"\b(note|record|add|mark|remember)\b", re.IGNORECASE)
 
 
 def is_bot_mention(text: str) -> bool:
-    return bool(_MENTION_RE.search(text))
+    return bool(_MENTION_RE.search(text or ""))
 
 
 def is_write_request(text: str) -> bool:
@@ -32,106 +55,117 @@ async def is_reply_to_bot(quoted_message_id: str | None) -> bool:
     return await is_bot_outbound(quoted_message_id)
 
 
-def thread_context(thread: ThreadInfo) -> str:
-    parts = [thread.title]
-    if thread.summary:
-        parts.append(f"Summary: {thread.summary}")
-    if thread.recent_context:
-        parts.append(f"Recent messages: {thread.recent_context}")
-    return " | ".join(parts)
+def _mentions_bot_jid(mentions: list[str]) -> bool:
+    bot = settings.gowa_device_id
+    if not bot or not mentions:
+        return False
+    aliases = {bot, bot.split("@", 1)[0]}
+    for raw in mentions:
+        if raw in aliases or raw.split("@", 1)[0] in aliases:
+            return True
+    return False
+
+
+def mentions_bot(message: InboundMessage) -> bool:
+    return is_bot_mention(message.text) or _mentions_bot_jid(message.mentions)
+
+
+def _is_media_only(message: InboundMessage) -> bool:
+    return not (message.text or "").strip() and message.media_kind is not None
+
+
+def _body(message: InboundMessage) -> str:
+    text = (message.text or "").strip()
+    if text:
+        return text
+    if message.media_kind:
+        return f"[{message.media_kind}]"
+    return "[empty]"
+
+
+def _format_line(message: InboundMessage, by_id: dict[str, InboundMessage]) -> str:
+    name = message.sender_name or message.sender
+    body = _body(message)
+    if not message.replied_to_id:
+        return f"{name}: {body}"
+    quoted = by_id.get(message.replied_to_id)
+    if quoted is None:
+        return f"{name} (reply): {body}"
+    qname = quoted.sender_name or quoted.sender
+    return f"{name} (replying to {qname}): {body}"
+
+
+async def _recent_window(message: InboundMessage) -> list[InboundMessage]:
+    history = [
+        item
+        for item in await recent_messages(message.channel, limit=CONTEXT_LIMIT)
+        if item.message_id != message.message_id
+    ]
+    return (history + [message])[-CONTEXT_LIMIT:]
+
+
+async def _quoted_by(window: list[InboundMessage]) -> list[InboundMessage]:
+    """Messages the last-5 window replies to, if they aren't already in it."""
+    have = {item.message_id for item in window}
+    extras: list[InboundMessage] = []
+    for item in window:
+        quoted_id = item.replied_to_id
+        if not quoted_id or quoted_id in have:
+            continue
+        quoted = await get_message(quoted_id)
+        if quoted is None or quoted.channel != item.channel:
+            continue
+        extras.append(quoted)
+        have.add(quoted_id)
+    return extras
+
+
+async def _context_for(message: InboundMessage) -> list[InboundMessage]:
+    window = await _recent_window(message)
+    combined = [*await _quoted_by(window), *window]
+    seen: set[str] = set()
+    ordered: list[InboundMessage] = []
+    for item in sorted(combined, key=lambda m: (m.sent_at, m.row_id, m.message_id)):
+        if item.message_id in seen:
+            continue
+        seen.add(item.message_id)
+        ordered.append(item)
+    return ordered
 
 
 class ChatAgent:
-    def __init__(
-        self,
-        vault: VaultClient,
-        decision_client: DecisionModelProtocol,
-        worker_client: TextModelClient,
-    ) -> None:
-        self.vault = vault
-        self.decision_client = decision_client
+    def __init__(self, worker_client: TextModelClient, vault: VaultClient) -> None:
         self.worker_client = worker_client
+        self.vault = vault
 
     async def handle(self, message: InboundMessage) -> str | None:
-        if not await self._is_addressed(message):
+        if message.from_me or not mentions_bot(message):
             return None
+        if _is_media_only(message):
+            await gateway_send(message.channel, CANNOT_SEE_MEDIA, reply_to=message.message_id)
+            return CANNOT_SEE_MEDIA
+        if not (message.text or "").strip():
+            return None
+        return await self._answer(message)
+
+    async def _answer(self, message: InboundMessage) -> str:
+        context = await _context_for(message)
+        by_id = {item.message_id: item for item in context}
+        lines = "\n".join(_format_line(item, by_id) for item in context)
+        prompt = f"Recent messages:\n{lines}\n\nReply to the latest message."
         channel = await get_channel(message.channel)
-        if channel is None:
-            return None
-        store = ThreadStore(self.vault, channel)
-        thread = await self._resolve_thread(message.text, message.replied_to_id, store)
-        if thread is None:
-            reply = "I don't see an active thread to answer that from yet."
-            await gateway_send(message.channel, reply, reply_to=message.message_id)
-            return reply
-        if is_write_request(message.text):
-            return await self._propose_write(message.channel, thread, message.text)
-        return await self._answer(message, thread)
-
-    async def _is_addressed(self, message: InboundMessage) -> bool:
-        return is_bot_mention(message.text) or await is_reply_to_bot(message.replied_to_id)
-
-    async def _resolve_thread(
-        self,
-        text: str,
-        quoted_message_id: str | None,
-        store: ThreadStore,
-    ) -> ThreadInfo | None:
-        if quoted_message_id:
-            thread = await store.find_by_src_id(quoted_message_id)
-            if thread is not None:
-                return thread_info(thread)
-
-        active_threads = [thread_info(t) for t in await store.threads()]
-        if not active_threads:
-            return None
-        if len(active_threads) == 1:
-            return active_threads[0]
-
-        options: dict[str, str | None] = {t.slug: thread_context(t) for t in active_threads}
-        question = f"Which active thread is this chat message about?\n\nMessage: {text}"
         with scope(phase=CHAT):
-            result = await decide_with_fallback(
-                self.decision_client, self.worker_client, question, options
-            )
-        return next((t for t in active_threads if t.slug == result.option), active_threads[0])
-
-    async def _answer(self, message: InboundMessage, thread: ThreadInfo) -> str:
-        with scope(phase=CHAT):
-            result = await generate(
+            result = await generate_with_tools(
                 self.worker_client,
                 "worker",
-                (
-                    f"Thread summary:\n{thread.summary}\n\nQuestion: {message.text}\n\n"
-                    "Answer using only the summary above."
-                ),
+                prompt,
+                tools=list(read_only_wiki_tools(self.vault, channel)),
+                deps=None,
+                system=_SYSTEM,
             )
         answer = result.text.strip()
         await gateway_send(message.channel, answer, reply_to=message.message_id)
         return answer
-
-    async def _propose_write(self, channel_jid: str, thread: ThreadInfo, text: str) -> str:
-        return await propose_wiki_write(channel_jid, thread.path, "Notes", f"- {text}")
-
-
-async def identify_thread(
-    text: str,
-    quoted_message_id: str | None,
-    store: ThreadStore,
-    decision_client: DecisionModelProtocol,
-    worker_client: TextModelClient,
-) -> ThreadInfo | None:
-    agent = ChatAgent(store.vault, decision_client, worker_client)
-    return await agent._resolve_thread(text, quoted_message_id, store)
-
-
-async def answer_from_wiki(thread: ThreadInfo, question: str, worker_client: TextModelClient) -> str:
-    prompt = (
-        f"Thread summary:\n{thread.summary}\n\nQuestion: {question}\n\n"
-        "Answer using only the summary above."
-    )
-    result = await generate(worker_client, "worker", prompt)
-    return result.text.strip()
 
 
 async def interpret_text_approval(reply_text: str, decision_client: DecisionModelProtocol) -> bool:
@@ -140,9 +174,6 @@ async def interpret_text_approval(reply_text: str, decision_client: DecisionMode
 
 
 async def handle_chat_message(
-    message: InboundMessage,
-    vault: VaultClient,
-    decision_client: DecisionModelProtocol,
-    worker_client: TextModelClient,
+    message: InboundMessage, worker_client: TextModelClient, vault: VaultClient
 ) -> str | None:
-    return await ChatAgent(vault, decision_client, worker_client).handle(message)
+    return await ChatAgent(worker_client, vault).handle(message)

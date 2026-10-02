@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+_MEDIA_KEYS = ("sticker", "image", "video", "audio", "document", "video_note")
+
 
 @dataclass(frozen=True)
 class GowaEvent:
@@ -34,6 +36,27 @@ class GowaEvent:
     replied_to_id: str | None
     reaction_emoji: str | None
     reacted_message_id: str | None
+    # gowa puts media on type-specific keys (`image`, `sticker`, …);
+    # empty/missing means a plain text message.
+    media_kind: str | None
+    mentions: tuple[str, ...]
+    from_me: bool
+
+
+def _media_kind(body: dict) -> str | None:
+    for key in _MEDIA_KEYS:
+        if body.get(key):
+            return key
+    return None
+
+
+def _mentions(body: dict) -> tuple[str, ...]:
+    raw = body.get("mentions") or body.get("mentioned_ids") or body.get("mentioned_jids") or []
+    if isinstance(raw, str):
+        return (raw,) if raw else ()
+    if isinstance(raw, list):
+        return tuple(str(item) for item in raw if item)
+    return ()
 
 
 def parse_gowa_event(raw: dict) -> GowaEvent:
@@ -44,11 +67,14 @@ def parse_gowa_event(raw: dict) -> GowaEvent:
         chat_id=body.get("chat_id"),
         sender=body.get("from"),
         sender_name=body.get("sender_display_name") or body.get("from_name") or None,
-        text=body.get("body", ""),
+        text=body.get("body") or "",
         timestamp=body.get("timestamp"),
         replied_to_id=body.get("replied_to_id"),
         reaction_emoji=body.get("reaction"),
         reacted_message_id=body.get("reacted_message_id"),
+        media_kind=_media_kind(body),
+        mentions=_mentions(body),
+        from_me=bool(body.get("is_from_me") or body.get("from_me")),
     )
 
 

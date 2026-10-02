@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,37 @@ class FakeLapis(LapisClient):
         del self.files[path]
         return {"ok": True, "path": path}
 
+    def _tool_grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        glob: str | None = None,  # noqa: ARG002
+        ignoreCase: bool = True,
+        literal: bool = True,
+        context: int = 0,  # noqa: ARG002
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        flags = re.IGNORECASE if ignoreCase else 0
+        needle = re.escape(pattern) if literal else pattern
+        rx = re.compile(needle, flags)
+        prefix = path.rstrip("/") if path else ""
+        matches: list[dict[str, Any]] = []
+        for file_path, (content, _rev) in sorted(self.files.items()):
+            if prefix and file_path != prefix and not file_path.startswith(prefix + "/"):
+                continue
+            for i, line in enumerate(content.splitlines(), 1):
+                if rx.search(line):
+                    matches.append({"path": file_path, "line": i, "text": line})
+        page = matches[offset : offset + limit]
+        return {
+            "matches": page,
+            "totalMatches": len(matches),
+            "offset": offset,
+            "limit": limit,
+            "truncated": offset + limit < len(matches),
+        }
+
 
 @pytest.fixture(params=["local", "lapis"])
 def vault(request, tmp_path: Path) -> VaultClient:
@@ -173,3 +205,11 @@ async def test_local_conflict_writes_a_sync_conflict_note(tmp_path: Path):
         await vault.write("projects/watcher.md", "attempted-v2", base_revision="stale-revision")
     note = next((tmp_path / ".sync-conflicts").glob("projects_watcher.md.*")).read_text()
     assert "v1" in note and "attempted-v2" in note and "stale-revision" in note
+
+
+async def test_search_finds_literal_matches_under_a_prefix(vault: VaultClient):
+    await vault.create("channels/demo/hall.md", "Aira is booking the seminar hall.")
+    await vault.create("people/aira.md", "Aira is a member.")
+    hits = await vault.search("Aira", path="channels/demo", literal=True)
+    assert [h.path for h in hits] == ["channels/demo/hall.md"]
+    assert "seminar hall" in hits[0].text

@@ -72,6 +72,35 @@ async def generate(client: TextModelClient, tier: str, prompt: str, system: str 
     return result
 
 
+async def generate_with_tools(
+    client: TextModelClient,
+    tier: str,
+    prompt: str,
+    *,
+    tools: list,
+    deps: object,
+    deps_type: type = object,
+    system: str | None = None,
+) -> TextResult:
+    """`generate` for a tool-using run - same logging contract."""
+    started = time.monotonic()
+    try:
+        result = await client.generate_with_tools(
+            prompt, tools=tools, deps=deps, deps_type=deps_type, system=system
+        )
+    except Exception as exc:
+        await log_model_call(
+            tier, client.model_name, 0, 0,
+            duration_ms=_ms(started), outcome=ERROR, error=f"{type(exc).__name__}: {exc}",
+        )
+        raise
+    await log_model_call(
+        tier, client.model_name, result.input_tokens, result.output_tokens,
+        cost_usd=result.cost, cost_source=result.cost_source, duration_ms=_ms(started),
+    )
+    return result
+
+
 async def generate_structured[OutputT: BaseModel](
     client: TextModelClient,
     tier: str,

@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +47,13 @@ class ReadResult:
 @dataclass
 class WriteResult:
     revision: str
+
+
+@dataclass
+class SearchHit:
+    path: str
+    line: int
+    text: str
 
 
 class ConflictError(Exception):
@@ -88,6 +96,7 @@ class VaultClient(Protocol):
       `ConflictError` and never overwrites.
     - `list` returns every `.md` path under a prefix, conflict notes
       excluded. `delete` of a missing path is a no-op.
+    - `search` greps page contents (read-only); never writes.
     """
 
     async def read(self, path: str) -> ReadResult: ...
@@ -95,6 +104,14 @@ class VaultClient(Protocol):
     async def write(self, path: str, content: str, base_revision: str) -> WriteResult: ...
     async def list(self, prefix: str) -> list[str]: ...
     async def delete(self, path: str) -> None: ...
+    async def search(
+        self,
+        pattern: str,
+        path: str | None = None,
+        limit: int = 40,
+        ignore_case: bool = True,
+        literal: bool = True,
+    ) -> Sequence[SearchHit]: ...
 
 
 def _require_base_revision(path: str, base_revision: str) -> None:
@@ -172,6 +189,31 @@ class LocalDirClient:
         file = self._file(path)
         if file.exists():
             file.unlink()
+
+    async def search(
+        self,
+        pattern: str,
+        path: str | None = None,
+        limit: int = 40,
+        ignore_case: bool = True,
+        literal: bool = True,
+    ) -> Sequence[SearchHit]:
+        flags = re.IGNORECASE if ignore_case else 0
+        needle = re.escape(pattern) if literal else pattern
+        try:
+            rx = re.compile(needle, flags)
+        except re.error:
+            rx = re.compile(re.escape(pattern), flags)
+        prefix = path.rstrip("/") if path else ""
+        hits: list[SearchHit] = []
+        for file_path in await self.list(prefix):
+            content = self._file(file_path).read_text()
+            for i, line in enumerate(content.splitlines(), 1):
+                if rx.search(line):
+                    hits.append(SearchHit(path=file_path, line=i, text=line.strip()))
+                    if len(hits) >= limit:
+                        return hits
+        return hits
 
     def _write_conflict_note(
         self, path: str, base_revision: str, current_content: str, attempted_content: str
@@ -362,3 +404,25 @@ class LapisClient:
             await self._call_tool("rm", {"path": path})
         except PageNotFound:
             pass
+
+    async def search(
+        self,
+        pattern: str,
+        path: str | None = None,
+        limit: int = 40,
+        ignore_case: bool = True,
+        literal: bool = True,
+    ) -> Sequence[SearchHit]:
+        arguments: dict[str, Any] = {
+            "pattern": pattern,
+            "limit": min(limit, 1000),
+            "ignoreCase": ignore_case,
+            "literal": literal,
+        }
+        if path:
+            arguments["path"] = path
+        data = await self._call_tool("grep", arguments)
+        return [
+            SearchHit(path=match["path"], line=int(match["line"]), text=str(match.get("text", "")).strip())
+            for match in data.get("matches", [])
+        ]

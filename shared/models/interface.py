@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from shared.config import settings
 from shared.models.benchmark import BenchmarkCase, BenchmarkReport, ModelReport, run_benchmark
-from shared.models.calls import generate, generate_structured, log_model_call
+from shared.models.calls import generate, generate_structured, generate_with_tools, log_model_call
 from shared.models.decision import (
     DecisionModelProtocol,
     FixtureDecisionModel,
@@ -79,6 +79,7 @@ __all__ = [
     "log_model_call",
     "generate",
     "generate_structured",
+    "generate_with_tools",
     "estimate_tokens",
     "decide_with_fallback",
     "Skill",

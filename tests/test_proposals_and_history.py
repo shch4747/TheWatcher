@@ -140,6 +140,9 @@ async def test_get_message_and_get_messages_and_get_context():
     ctx = await gateway.get_context("m2", before=1, after=1)
     assert [m.message_id for m in ctx] == ["m1", "m2", "m3"]
 
+    recent = await gateway.recent_messages(channel, limit=3)
+    assert [m.message_id for m in recent] == ["m2", "m3", "m4"]
+
 
 async def test_request_history_backfills_and_flags_source():
     channel = "backfill-chan@g.us"

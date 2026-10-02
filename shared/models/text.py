@@ -5,6 +5,9 @@ like a decision) goes to the Mentor instead, same interface either way.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
@@ -29,11 +32,42 @@ class TextModelClient:
     (Testing Decisions: "Worker/Mentor outputs as stored text")."""
 
     def __init__(self, model: Model | str, model_name: str):
+        self._model = model
         self._agent: Agent[None, str] = Agent(model, output_type=str, retries=STRUCTURED_RETRIES)
         self.model_name = model_name
 
     async def generate(self, prompt: str, system: str | None = None) -> TextResult:
         result = await self._agent.run(prompt, instructions=system)
+        usage = result.usage
+        cost, cost_source = resolve_cost(usage, self.model_name, settings.models_base_url)
+        return TextResult(
+            text=result.output,
+            input_tokens=usage.input_tokens or 0,
+            output_tokens=usage.output_tokens or 0,
+            cost=cost,
+            cost_source=cost_source,
+        )
+
+    async def generate_with_tools(
+        self,
+        prompt: str,
+        *,
+        tools: Sequence[Any],
+        deps: Any,
+        deps_type: type[Any] = object,
+        system: str | None = None,
+    ) -> TextResult:
+        """Same as `generate`, but the model may call `tools`. Used by the Chat
+        Agent's read-only wiki lookup. Ingestion stays on `generate` /
+        `generate_structured` (no tools)."""
+        agent: Agent[Any, str] = Agent(
+            self._model,
+            output_type=str,
+            deps_type=deps_type,
+            tools=list(tools),
+            retries=STRUCTURED_RETRIES,
+        )
+        result = await agent.run(prompt, deps=deps, instructions=system)
         usage = result.usage
         cost, cost_source = resolve_cost(usage, self.model_name, settings.models_base_url)
         return TextResult(

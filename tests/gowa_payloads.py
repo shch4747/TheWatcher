@@ -16,6 +16,8 @@ def message_event(
     event: str = "message",
     sender_name: str | None = None,
     timestamp: str | None = None,
+    media: dict | None = None,
+    mentions: list[str] | None = None,
 ) -> dict:
     body: dict = {"id": message_id, "chat_id": chat_id, "body": text}
     if sender:
@@ -26,6 +28,10 @@ def message_event(
         body["sender_display_name"] = sender_name
     if timestamp:
         body["timestamp"] = timestamp
+    if media:
+        body.update(media)
+    if mentions:
+        body["mentions"] = mentions
     return {"event": event, "payload": body}
 
 
@@ -50,6 +56,9 @@ def inbound(
     text: str = "",
     sender: str = "member@x",
     replied_to_id: str | None = None,
+    media_kind: str | None = None,
+    mentions: list[str] | None = None,
+    from_me: bool = False,
 ):
     """A live message as the Gateway hands it to a message hook."""
     from datetime import UTC, datetime
@@ -60,4 +69,5 @@ def inbound(
     return InboundMessage(
         row_id=0, message_id=message_id, channel=chat_id, received_at=now, sent_at=now,
         text=text, sender=sender, replied_to_id=replied_to_id,
+        media_kind=media_kind, mentions=mentions or [], from_me=from_me,
     )

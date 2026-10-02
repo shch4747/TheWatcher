@@ -22,7 +22,7 @@ import json
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 
 from shared.db import MessageBuffer, aware_utc, get_session
@@ -45,6 +45,9 @@ class InboundMessage(BaseModel):
     replied_to_id: str | None = None
     backfilled: bool = False
     edited: bool = False
+    media_kind: str | None = None
+    mentions: list[str] = Field(default_factory=list)
+    from_me: bool = False
 
 
 def to_inbound(row: MessageBuffer) -> InboundMessage:
@@ -62,6 +65,9 @@ def to_inbound(row: MessageBuffer) -> InboundMessage:
         replied_to_id=event.replied_to_id,
         backfilled=row.event_type == "message.backfill",
         edited=row.event_type == "message.edited",
+        media_kind=event.media_kind,
+        mentions=list(event.mentions),
+        from_me=event.from_me,
     )
 
 
@@ -109,6 +115,23 @@ async def get_messages(channel: str, since_id: str | None = None, limit: int = 1
                 stmt = stmt.where(MessageBuffer.id > anchor)
         rows = await session.scalars(stmt.order_by(MessageBuffer.id).limit(limit))
     return [to_inbound(r) for r in rows]
+
+
+async def recent_messages(channel: str, limit: int = 5) -> list[InboundMessage]:
+    """The latest `limit` ingested messages in `channel`, oldest first."""
+    async with get_session() as session:
+        rows = list(
+            await session.scalars(
+                select(MessageBuffer)
+                .where(
+                    MessageBuffer.channel == channel,
+                    MessageBuffer.event_type.in_(INGESTED_EVENTS),
+                )
+                .order_by(MessageBuffer.id.desc())
+                .limit(limit)
+            )
+        )
+    return [to_inbound(row) for row in reversed(rows)]
 
 
 async def get_context(message_id: str, before: int = 5, after: int = 5) -> list[InboundMessage]:

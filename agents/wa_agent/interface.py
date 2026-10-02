@@ -7,13 +7,12 @@ from __future__ import annotations
 
 from agents.wa_agent.chat import (
     ChatAgent,
-    answer_from_wiki,
     handle_chat_message,
-    identify_thread,
     interpret_text_approval,
     is_bot_mention,
     is_reply_to_bot,
     is_write_request,
+    mentions_bot,
 )
 from agents.wa_agent.ingestion import (
     BatchResult,
@@ -58,10 +57,9 @@ __all__ = [
     "run_lifecycle_for_channel",
     "sunday_stale_nudge",
     "handle_chat_message",
-    "identify_thread",
-    "answer_from_wiki",
     "interpret_text_approval",
     "is_bot_mention",
+    "mentions_bot",
     "is_reply_to_bot",
     "is_write_request",
     "ThreadRevision",
