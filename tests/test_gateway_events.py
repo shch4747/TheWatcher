@@ -44,6 +44,22 @@ def test_sender_name_is_none_when_gowa_sends_neither():
     assert event.sender_name is None
 
 
+def test_jid_from_devices_payload_picks_this_device_then_falls_back():
+    from shared.gateway.gowa_client import jid_from_devices_payload
+
+    listed = {
+        "results": [
+            {"device": "other", "jid": "111@s.whatsapp.net"},
+            {"device": "watcher", "jid": "4591712054@s.whatsapp.net"},
+        ]
+    }
+    assert jid_from_devices_payload(listed, "watcher") == "4591712054@s.whatsapp.net"
+    assert jid_from_devices_payload({"results": {"jid": "4591712054@s.whatsapp.net"}}, None) == (
+        "4591712054@s.whatsapp.net"
+    )
+    assert jid_from_devices_payload({"results": [{"device": "fake"}]}, "watcher") is None
+
+
 def test_media_and_mentions_are_parsed_from_payload():
     sticker = parse_gowa_event(
         {

@@ -12,6 +12,7 @@ import re
 from shared.config import settings
 from shared.gateway.interface import (
     InboundMessage,
+    bot_jid,
     get_channel,
     get_message,
     is_bot_outbound,
@@ -38,11 +39,25 @@ _SYSTEM = (
 )
 
 _MENTION_RE = re.compile(rf"@{re.escape(settings.bot_mention_name)}\b", re.IGNORECASE)
+_AT_TOKEN_RE = re.compile(r"@([^\s]+)")
 _WRITE_VERBS_RE = re.compile(r"\b(note|record|add|mark|remember)\b", re.IGNORECASE)
 
 
-def is_bot_mention(text: str) -> bool:
-    return bool(_MENTION_RE.search(text or ""))
+def _mention_key(token: str) -> str:
+    """Local part of a mention: `@Watcher` / `4591712054@s.whatsapp.net` -> `watcher` / `4591712054`."""
+    return token.strip().lstrip("@").rstrip(".,!?;:").split("@", 1)[0].lower()
+
+
+def _bot_aliases(login_jid: str | None = None) -> set[str]:
+    names = [settings.bot_mention_name, settings.gowa_device_id, login_jid]
+    return {_mention_key(name) for name in names if name}
+
+
+def is_bot_mention(text: str, login_jid: str | None = None) -> bool:
+    aliases = _bot_aliases(login_jid)
+    if _MENTION_RE.search(text or ""):
+        return True
+    return any(_mention_key(token) in aliases for token in _AT_TOKEN_RE.findall(text or ""))
 
 
 def is_write_request(text: str) -> bool:
@@ -55,19 +70,11 @@ async def is_reply_to_bot(quoted_message_id: str | None) -> bool:
     return await is_bot_outbound(quoted_message_id)
 
 
-def _mentions_bot_jid(mentions: list[str]) -> bool:
-    bot = settings.gowa_device_id
-    if not bot or not mentions:
-        return False
-    aliases = {bot, bot.split("@", 1)[0]}
-    for raw in mentions:
-        if raw in aliases or raw.split("@", 1)[0] in aliases:
-            return True
-    return False
-
-
-def mentions_bot(message: InboundMessage) -> bool:
-    return is_bot_mention(message.text) or _mentions_bot_jid(message.mentions)
+def mentions_bot(message: InboundMessage, login_jid: str | None = None) -> bool:
+    aliases = _bot_aliases(login_jid)
+    if is_bot_mention(message.text, login_jid):
+        return True
+    return any(_mention_key(raw) in aliases for raw in message.mentions)
 
 
 def _is_media_only(message: InboundMessage) -> bool:
@@ -139,7 +146,7 @@ class ChatAgent:
         self.vault = vault
 
     async def handle(self, message: InboundMessage) -> str | None:
-        if message.from_me or not mentions_bot(message):
+        if message.from_me or not mentions_bot(message, await bot_jid()):
             return None
         if _is_media_only(message):
             await gateway_send(message.channel, CANNOT_SEE_MEDIA, reply_to=message.message_id)

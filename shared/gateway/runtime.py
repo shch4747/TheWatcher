@@ -71,6 +71,9 @@ class GatewayRuntime:
     async def check_gowa_connection(self) -> dict:
         return await self.client.session_status()
 
+    async def bot_jid(self) -> str | None:
+        return await self.client.login_jid()
+
     async def request_history(self, channel: str, count: int) -> int:
         """Backfill: ask gowa for stored history and buffer whatever we don't
         already have, flagged `event_type="message.backfill"`."""

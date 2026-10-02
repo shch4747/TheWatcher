@@ -80,6 +80,11 @@ async def check_gowa_connection() -> dict:
     return await runtime.check_gowa_connection()
 
 
+async def bot_jid() -> str | None:
+    """This session's WhatsApp JID (`4591712054@s.whatsapp.net`), or None."""
+    return await runtime.bot_jid()
+
+
 async def handle_command(
     channel_jid: str, sender: str, text: str, vault: VaultClient | None = None
 ) -> str | None:
@@ -135,6 +140,7 @@ __all__ = [
     "receive_webhook",
     "send",
     "check_gowa_connection",
+    "bot_jid",
     "setup",
     "continue_setup_session",
     "unwatch",

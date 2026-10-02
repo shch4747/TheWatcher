@@ -62,6 +62,7 @@ class GowaClient:
         self.device_id = device_id if device_id is not None else settings.gowa_device_id
         self.rate = RateLimiter(min_gap_s if min_gap_s is not None else settings.wa_send_min_gap_s)
         self._client = client or httpx.AsyncClient(timeout=30)
+        self._login_jid: str | None = None
 
     def _headers(self) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
@@ -120,5 +121,44 @@ class GowaClient:
         except Exception as e:  # noqa: BLE001 - status probe, never raises
             return {"ok": False, "error": str(e)}
 
+    async def login_jid(self) -> str | None:
+        """The WhatsApp JID for this device, e.g. `4591712054@s.whatsapp.net`.
+
+        Group @mentions put that local part in the body (`@4591712054`), not
+        the display name and not the gowa device slot id. Cached after the
+        first successful lookup.
+        """
+        if self._login_jid:
+            return self._login_jid
+        status = await self.session_status()
+        if not status.get("ok"):
+            return None
+        jid = jid_from_devices_payload(status.get("data") or {}, self.device_id)
+        if jid:
+            self._login_jid = jid
+        return jid
+
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def jid_from_devices_payload(data: dict, device_id: str | None) -> str | None:
+    """Pick this session's JID out of `GET /app/devices` (list) or `/app/status` (object)."""
+    results = data.get("results")
+    if isinstance(results, dict):
+        jid = results.get("jid")
+        return str(jid) if jid else None
+    if not isinstance(results, list):
+        return None
+    wanted = (device_id or "").lower()
+    fallback: str | None = None
+    for device in results:
+        if not isinstance(device, dict):
+            continue
+        jid = device.get("jid")
+        if not jid:
+            continue
+        fallback = fallback or str(jid)
+        if wanted and str(device.get("device", "")).lower() == wanted:
+            return str(jid)
+    return fallback

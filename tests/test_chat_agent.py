@@ -245,6 +245,22 @@ def test_is_bot_mention_and_is_write_request():
     assert wa_agent.is_write_request("who owns this?") is False
 
 
+def test_whatsapp_mention_uses_the_bot_number_not_the_display_name():
+    login = "4591712054@s.whatsapp.net"
+    assert wa_agent.is_bot_mention("@4591712054 are you alive?", login) is True
+    assert wa_agent.is_bot_mention("@919244352208 why so slow", login) is False
+    tagged = inbound("lid1", CHANNEL_JID, "@4591712054 are you alive?")
+    assert wa_agent.mentions_bot(tagged, login) is True
+    other = inbound("lid2", CHANNEL_JID, "@919244352208 why so slow")
+    assert wa_agent.mentions_bot(other, login) is False
+
+
+async def test_whatsapp_number_mention_answers(vault: LocalDirClient):
+    message = _message("@4591712054 are you alive?", "q-lid")
+    reply = await wa_agent.handle_chat_message(message, EchoWorker("yes"), vault)
+    assert reply == "yes"
+
+
 THREAD_PAGE = (
     '---\ntype: thread\nslug: hall-booking\nchannel: "[[ChatAgentProj (WhatsApp)]]"\n'
     "title: Hall booking\nstate: active\n---\n# Hall booking\n"

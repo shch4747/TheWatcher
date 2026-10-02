@@ -42,4 +42,13 @@ async def chat_messages(jid: str, limit: int = 100, offset: int = 0) -> dict:
 
 @app.get("/app/devices")
 async def devices() -> dict:
-    return {"results": [{"device": "fake", "status": "connected"}]}
+    return {
+        "results": [
+            {
+                "name": "Watcher",
+                "device": "fake",
+                "jid": "4591712054@s.whatsapp.net",
+                "status": "connected",
+            }
+        ]
+    }
