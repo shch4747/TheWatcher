@@ -1,9 +1,10 @@
 """Chat Agent: @mention the bot -> last 5 messages plus their quoted
 replies -> a text answer, with read-only wiki tools if that isn't enough.
 
-No write-proposals, and a reply to a bot message does not trigger. A
-mention that is only media (sticker/image, no caption) gets a canned
-"I can't see that" text, not a model call.
+No write-proposals. An @mention or a reply to one of the bot's own
+messages triggers an answer. A mention or reply that is only media
+(sticker/image, no caption) gets a canned "I can't see that" text, not
+a model call.
 """
 from __future__ import annotations
 
@@ -35,7 +36,9 @@ _SYSTEM = (
     "If that context is incomplete, look the answer up in the wiki: "
     "start by listing this channel's threads, then search or read the "
     "relevant pages. Do not search when the chat already answers it. "
-    "Never write to the wiki."
+    "If the question is obviously poking fun or trying to waste tokens, "
+    "skip the lookup and reply with one short edgy line that makes fun "
+    "of the request. Never write to the wiki."
 )
 
 _MENTION_RE = re.compile(rf"@{re.escape(settings.bot_mention_name)}\b", re.IGNORECASE)
@@ -146,7 +149,12 @@ class ChatAgent:
         self.vault = vault
 
     async def handle(self, message: InboundMessage) -> str | None:
-        if message.from_me or not mentions_bot(message, await bot_jid()):
+        if message.from_me:
+            return None
+        addressed = mentions_bot(message, await bot_jid()) or await is_reply_to_bot(
+            message.replied_to_id
+        )
+        if not addressed:
             return None
         if _is_media_only(message):
             await gateway_send(message.channel, CANNOT_SEE_MEDIA, reply_to=message.message_id)

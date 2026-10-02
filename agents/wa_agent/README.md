@@ -28,11 +28,12 @@ ADR-0003).
   loop and item rendering in `assign.py`. Prompts are constants, not
   skills.
 - `revise.py` — title/summary guards and the thread-update orchestration.
-- `chat.py` — mention-only trigger (`@watcher` or WhatsApp's `@<bot
-  number>` body); context is the last 5 messages plus any message those
-  five reply to. Read-only wiki tools (list this channel's threads,
-  search, read a page) when that isn't enough. Media-only mentions get
-  a canned "can't see that" reply.
+- `chat.py` — trigger is an @mention (`@watcher` or WhatsApp's
+  `@<bot number>`) or a reply to one of the bot's own messages. Context
+  is the last 5 messages plus any message those five reply to.
+  Read-only wiki tools (list this channel's threads, search, read a
+  page) when that isn't enough. Media-only mentions and replies get a
+  canned "can't see that" reply.
 - `wiki_tools.py` — the Chat Agent's read-only Lapis tools (no writes).
 - `lifecycle.py` — daily stale/archive pass and the Sunday nudge.
 - `proposals.py` — proposal lifecycle; persistence is `ProposalStore` on

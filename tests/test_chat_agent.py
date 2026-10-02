@@ -1,5 +1,5 @@
-"""Chat Agent: @mention answers from the last 5 messages; replies to the
-bot do not trigger; a media-only mention gets a canned text reply."""
+"""Chat Agent: @mention or a reply to the bot answers from the last 5
+messages; a media-only mention gets a canned text reply."""
 from __future__ import annotations
 
 import json
@@ -87,12 +87,21 @@ async def test_non_addressed_message_is_ignored(vault: LocalDirClient):
     assert fake_gowa_app.state.sent_messages == []
 
 
-async def test_reply_to_bot_does_not_trigger(vault: LocalDirClient):
+async def test_reply_to_bot_triggers(vault: LocalDirClient):
     async with get_session() as session:
         session.add(OutboundLog(channel=CHANNEL_JID, text="watching", message_id="bot-msg-1"))
         await session.commit()
 
     message = inbound("q2", CHANNEL_JID, "and when is it due?", replied_to_id="bot-msg-1")
+    reply = await wa_agent.handle_chat_message(message, EchoWorker(), vault)
+    assert reply == "Hall is booked for Friday."
+    sent = fake_gowa_app.state.sent_messages[-1]
+    assert sent["message"] == "Hall is booked for Friday."
+    assert sent.get("reply_message_id") == "q2"
+
+
+async def test_reply_to_someone_else_does_not_trigger(vault: LocalDirClient):
+    message = inbound("q3", CHANNEL_JID, "and when is it due?", replied_to_id="human-msg")
     reply = await wa_agent.handle_chat_message(message, EchoWorker(), vault)
     assert reply is None
     assert fake_gowa_app.state.sent_messages == []
