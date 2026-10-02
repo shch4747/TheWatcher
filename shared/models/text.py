@@ -14,7 +14,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from shared.config import settings
 from shared.models.schemas import StructuredResult, TextResult
-from shared.observability.cost import resolve_cost
+from shared.observability.interface import resolve_cost
 
 # How many times pydantic-ai re-asks the model after a reply that fails
 # schema validation (or an output_validator's ModelRetry) before the run

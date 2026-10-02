@@ -20,6 +20,16 @@ This is the v1 application described in `docs/Spec - Watcher v1.md` and
 - Nothing outside a package imports anything from it except its
   `interface` module. Never `from shared.gateway.gowa_client import ...`
   from `agents/wa_agent` — go through `shared.gateway.interface`.
+  `tests/test_architecture_boundaries.py` enforces this for production
+  code (frozen agents excluded).
+- Classes own identity, mutable state, dependencies, or lifecycle
+  (`ThreadStore`, `Inbox`, `IngestionPipeline`, `ChatAgent`,
+  `ProposalService`, `ProjectAgent`, `Scheduler`, `GatewayRuntime`).
+  Parsers, prompts, item policy, and formatting stay as functions.
+  If an input selects a different workflow, dispatch to a named
+  handler — do not hide a second job behind a flag.
+- Agents never import `shared.db`. Channel rows, outbound lookups,
+  cursors, and proposal persistence are Gateway DTOs / `ProposalStore`.
 - No package calls gowa, an LLM provider, or Lapis directly except
   `shared.gateway`, `shared.models`, and `shared.wiki` respectively.
 - No cross-imports between `agents/wa_agent` and `agents/project_agent`,

@@ -451,7 +451,7 @@ async def test_logs_channel_is_reported_as_excluded_not_as_threads(vault: LocalD
 def test_old_and_new_timestamps_render_in_ist():
     """`/health` is read on a phone in Delhi; SQLite hands back naive
     datetimes that were written as UTC."""
-    from shared.gateway.interface import _isoformat
+    from shared.gateway.command_handlers import _isoformat
 
     assert _isoformat(datetime(2026, 9, 22, 13, 16, 7, tzinfo=UTC)) == "2026-09-22 18:46 IST"
     assert _isoformat(datetime(2026, 9, 22, 13, 16, 7)) == "2026-09-22 18:46 IST"

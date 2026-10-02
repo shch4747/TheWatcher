@@ -10,12 +10,16 @@ from shared.wiki.templates import slugify
 
 class ChannelLike(Protocol):
     """What the wiki needs to know about a Channel - satisfied by the
-    `channels` table row without importing it."""
+    Gateway's `ChannelInfo` and by the `channels` table row."""
 
-    jid: str
-    title: str | None
-    kind: str
-    initiative: str | None
+    @property
+    def jid(self) -> str: ...
+    @property
+    def title(self) -> str | None: ...
+    @property
+    def kind(self) -> str: ...
+    @property
+    def initiative(self) -> str | None: ...
 
 
 def channel_dir(channel: ChannelLike) -> str:

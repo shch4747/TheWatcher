@@ -155,3 +155,16 @@ async def test_persistent_conflicts_surface(vault):
     await Inbox(vault, "project_agent").post(_notice("t1"))
     with pytest.raises(ConflictError):
         await Inbox(AlwaysConflicts(vault.root), "project_agent").post(_notice("t2"))
+
+
+def test_two_consumer_registries_are_isolated():
+    a = inbox_module.ConsumerRegistry()
+    b = inbox_module.ConsumerRegistry()
+    woken: list[str] = []
+    a.register("agent-a", lambda: woken.append("a"))
+    assert a.registered() == ["agent-a"]
+    assert b.registered() == []
+    b.wake("agent-a")  # no consumer, must not call a's wake
+    assert woken == []
+    a.wake("agent-a")
+    assert woken == ["a"]

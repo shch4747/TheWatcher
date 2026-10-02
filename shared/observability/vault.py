@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from shared.observability.record import CONFLICT, ERROR, OK, record_vault_op
-from shared.wiki.lapis_client import ConflictError, PageExists, ReadResult, VaultClient, WriteResult
+from shared.wiki.interface import ConflictError, PageExists, ReadResult, VaultClient, WriteResult
 
 
 class ObservedVaultClient:

@@ -15,16 +15,25 @@ ADR-0003).
 ## Layout
 
 - `interface.py` — the package's only public surface: `run_batch` and the
-  thread lifecycle/nudge jobs, plus the Chat Agent entry points.
-- `assign.py` — the two structured model calls ingestion makes
+  thread lifecycle/nudge jobs, plus the Chat Agent entry points. Classes
+  (`IngestionPipeline`, `ChatAgent`, `ProposalService`) live behind these
+  functions so `main.py` does not need a flag-day rewrite.
+- `ingestion.py` — batch cutting and the ingest transaction. Scheduled vs
+  forced cuts are separate methods; non-ingested channels (logs) have
+  their own drain path.
+- `assign.py` / `assign_models.py` — the two structured model calls
+  ingestion makes
   ([ADR-0012](../../docs/adr/0012-structured-assignment-replaces-choice.md)):
-  one *assignment* call per chunk of messages (which thread does each
-  message belong to, and what new threads does this batch start), and
-  one *thread update* call per touched thread (title, Summary, typed
-  Items). Both prompts are constants in this module, not skills — the
-  `skills/` bundles are for the Chat Agent and the benchmark harness.
-- `messages.py` — `BufferedMessage` / `ThreadInfo`, shared by the two
-  above.
+  JSON contracts in `assign_models.py`; prompts, chunking, assignment
+  loop and item rendering in `assign.py`. Prompts are constants, not
+  skills.
+- `revise.py` — title/summary guards and the thread-update orchestration.
+- `chat.py` — mention/reply handling split into trigger detection, thread
+  resolution, read-answer, and write-proposal.
+- `lifecycle.py` — daily stale/archive pass and the Sunday nudge.
+- `proposals.py` — proposal lifecycle; persistence is `ProposalStore` on
+  the Gateway interface, executors are one function per kind.
+- `messages.py` — `BufferedMessage` / `ThreadInfo`.
 
 Ingestion does not use the Decision Model (Jev); only the Chat Agent
 does.

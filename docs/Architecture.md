@@ -81,12 +81,14 @@ the scheduler imports observability and the gateway imports the
 scheduler, so that would close a cycle. The ingest report is *rendered*
 there and *sent* by `main.py` (ADR-0013).
 
-## Module boundaries (enforced by convention, not tooling)
+## Module boundaries (enforced by `tests/test_architecture_boundaries.py`)
 
 - Every package exposes exactly one `interface.py`; nothing outside a
   package imports a submodule directly (`shared.gateway.gowa_client`,
   `shared.wiki.parser`, etc. are never imported from outside their own
-  package) - see `AGENTS.md`.
+  package) - see `AGENTS.md`. Classes that hold state live *behind*
+  that interface; the public names stay async functions so `main.py`
+  does not need a flag-day rewrite.
 - `agents/wa_agent` and `agents/project_agent` never import each other;
   both go through `shared/*` interfaces for everything (identity,
   wiki I/O, models, scheduling).

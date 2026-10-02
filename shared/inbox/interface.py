@@ -86,17 +86,45 @@ class InboxItem(InboxPost):
 
 Wake = Callable[[], None]
 _Change = Callable[[list[InboxItem], list[str]], tuple[list[InboxItem], list[str]]]
-_consumers: dict[str, Wake] = {}
+
+
+class ConsumerRegistry:
+    """Wake callbacks for triggering inbox items. Tests can use an
+    isolated instance; the process default backs `register_consumer`."""
+
+    def __init__(self) -> None:
+        self._consumers: dict[str, Wake] = {}
+
+    def register(self, agent: str, wake: Wake) -> None:
+        self._consumers[agent] = wake
+
+    def unregister_all(self) -> None:
+        self._consumers.clear()
+
+    def registered(self) -> list[str]:
+        return sorted(self._consumers)
+
+    def wake(self, agent: str) -> None:
+        fn = self._consumers.get(agent)
+        if fn is None:
+            logger.warning("triggering item for %s but no consumer is registered", agent)
+            return
+        fn()
+
+
+_default_consumers = ConsumerRegistry()
+# Test-compat alias: the same dict the default registry uses.
+_consumers = _default_consumers._consumers
 
 
 def register_consumer(agent: str, wake: Wake) -> None:
     """How to wake `agent` when a triggering item is posted for it."""
-    _consumers[agent] = wake
+    _default_consumers.register(agent, wake)
 
 
 def unregister_all() -> None:
     """Test-only."""
-    _consumers.clear()
+    _default_consumers.unregister_all()
 
 
 # --------------------------------------------------------------------------
@@ -171,10 +199,13 @@ def _same_subject(a: InboxPost, b: InboxPost) -> bool:
 
 
 class Inbox:
-    def __init__(self, vault: VaultClient, agent: str):
+    def __init__(
+        self, vault: VaultClient, agent: str, consumers: ConsumerRegistry | None = None
+    ):
         self.vault = vault
         self.agent = agent
         self.path = inbox_page_path(agent)
+        self._consumers = consumers or _default_consumers
 
     def _new_page(self) -> str:
         return (
@@ -237,11 +268,7 @@ class Inbox:
 
         await self._write(change)
         if any(p.trigger for p in posts):
-            wake = _consumers.get(self.agent)
-            if wake is None:
-                logger.warning("triggering item for %s but no consumer is registered", self.agent)
-            else:
-                wake()
+            self._consumers.wake(self.agent)
 
     async def ack(self, ids: Iterable[str]) -> None:
         wanted = set(ids)
@@ -262,6 +289,7 @@ __all__ = [
     "Inbox",
     "InboxItem",
     "InboxPost",
+    "ConsumerRegistry",
     "register_consumer",
     "unregister_all",
 ]

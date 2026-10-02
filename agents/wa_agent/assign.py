@@ -30,23 +30,51 @@ import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from datetime import datetime
 from functools import partial
-from typing import Literal
 
-from pydantic import BaseModel, Field
 from shared.config import settings
 from shared.models.interface import TextModelClient, estimate_tokens, generate_structured
 from shared.observability.interface import CLASSIFICATION, SUMMARISATION, scope
 from shared.wiki.interface import Item, format_item_line, parse_items
 
+from agents.wa_agent.assign_models import (
+    CHATTER,
+    NEW_THREAD,
+    Assignment,
+    AssignmentResponse,
+    AssignmentResult,
+    ItemOut,
+    NewThread,
+    SenderNames,
+    ThreadUpdate,
+)
 from agents.wa_agent.messages import BufferedMessage, ThreadInfo
+
+__all__ = [
+    "CHATTER",
+    "NEW_THREAD",
+    "Assignment",
+    "AssignmentResponse",
+    "AssignmentResult",
+    "ItemOut",
+    "NewThread",
+    "SenderNames",
+    "ThreadUpdate",
+    "ASSIGN_SYSTEM_PROMPT",
+    "THREAD_UPDATE_SYSTEM_PROMPT",
+    "assign_batch",
+    "build_assignment_prompt",
+    "build_thread_update_prompt",
+    "chunk_messages",
+    "format_context_line",
+    "format_message_line",
+    "render_items",
+    "update_thread",
+]
 
 logger = logging.getLogger(__name__)
 
-CHATTER = "chatter"
-NEW_THREAD = "new-thread"
 _NEW_ID_RE = re.compile(r"^new-(\d+)$")
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -61,43 +89,6 @@ ASSIGN_MAX_RETRIES = 2
 # no room for the messages themselves. Beyond it, recent lines are
 # dropped (stale threads first) before the messages are chunked.
 _CONTEXT_BUDGET_SHARE = 0.6
-
-
-# --------------------------------------------------------------------------
-# JSON contracts
-# --------------------------------------------------------------------------
-
-
-class NewThread(BaseModel):
-    id: str = Field(description='"new-1", "new-2", ... numbered from the index given in the prompt')
-    title: str = Field(description="At most 5 plain words naming the concrete topic")
-    description: str = Field(description="1-2 sentences: what this thread is about")
-
-
-class Assignment(BaseModel):
-    message_id: str = Field(description="The id= value of one message from the prompt")
-    thread: str = Field(description='An existing thread slug, a "new-N" id you declared, or "chatter"')
-
-
-class AssignmentResponse(BaseModel):
-    new_threads: list[NewThread] = []
-    assignments: list[Assignment]
-
-
-class ItemOut(BaseModel):
-    kind: Literal["task", "decision", "resource", "question"]
-    text: str
-    src_ids: list[str] = Field(description="Message ids (from [src:: ...]) this item comes from")
-    owner: str | None = Field(default=None, description="A member name exactly as listed in the prompt")
-    due: str | None = Field(default=None, description="YYYY-MM-DD, only if stated")
-    done: bool = False
-    block_id: str | None = Field(default=None, description="Reuse an existing item's ^id when updating it")
-
-
-class ThreadUpdate(BaseModel):
-    title: str
-    summary: str
-    items: list[ItemOut] = []
 
 
 # --------------------------------------------------------------------------
@@ -153,40 +144,6 @@ THREAD_UPDATE_SYSTEM_PROMPT = (
 
 def _ts(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
-
-
-@dataclass
-class SenderNames:
-    """Per-batch resolution of sender jid -> wiki member title (from the
-    members registry), so the prompt and page builders never hit the DB
-    per line. `members[jid]` is None for an unlinked sender."""
-
-    members: dict[str, str | None] = field(default_factory=dict)
-
-    def wiki_name(self, m: BufferedMessage) -> str:
-        """How the sender appears on a wiki page: `[[Member]]` when
-        linked, else the WhatsApp display name, else - only when gowa
-        gave no name at all - the raw jid."""
-        title = self.members.get(m.sender)
-        if title:
-            return f"[[{title}]]"
-        return m.sender_name or m.sender
-
-    def prompt_name(self, m: BufferedMessage) -> str:
-        """How the sender appears to the model: the name plus the jid in
-        parentheses, so two people with the same display name stay
-        distinguishable and a linked member is recognisable by title."""
-        title = self.members.get(m.sender)
-        name = title or m.sender_name
-        return f"{name} ({m.sender})" if name else m.sender
-
-    def member_titles(self, messages: list[BufferedMessage]) -> list[str]:
-        seen: list[str] = []
-        for m in messages:
-            title = self.members.get(m.sender)
-            if title and title not in seen:
-                seen.append(title)
-        return seen
 
 
 def _one_line(text: str) -> str:
@@ -361,16 +318,6 @@ def chunk_messages(
 # --------------------------------------------------------------------------
 # Assignment
 # --------------------------------------------------------------------------
-
-
-@dataclass
-class AssignmentResult:
-    # slug | "new-thread:N" | "chatter" -> messages, in batch order
-    buckets: dict[str, list[BufferedMessage]] = field(default_factory=dict)
-    # "new-thread:N" -> the model's title/description for it
-    new_threads: dict[str, NewThread] = field(default_factory=dict)
-    model_calls: int = 0
-    unassigned: int = 0  # fell through every retry -> counted as chatter
 
 
 def _validate_assignment(

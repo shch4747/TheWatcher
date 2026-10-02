@@ -170,6 +170,17 @@ def test_is_due_run_at_and_run_every():
     assert is_due(every, last_finished_at=now - timedelta(minutes=10), now=now) is True
 
 
+def test_two_scheduler_instances_do_not_share_registry():
+    async def noop() -> None:
+        pass
+
+    a = scheduler.Scheduler()
+    b = scheduler.Scheduler()
+    a.register("job-a", noop, RunNow())
+    assert a.registered_jobs() == ["job-a"]
+    assert b.registered_jobs() == []
+
+
 def test_render_agent_status_includes_ledger_rows():
     from shared.db import Run
 

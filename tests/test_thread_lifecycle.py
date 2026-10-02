@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 from agents.wa_agent import interface as wa_agent
+from agents.wa_agent import lifecycle as wa_lifecycle
 from httpx import ASGITransport
 from shared.db import BotAdmin, Channel, get_session
 from shared.gateway import interface as gateway
@@ -140,7 +141,7 @@ async def test_sunday_nudge_posts_counts_and_links(vault: LocalDirClient, monkey
     async def _this_coordis(kind: str):
         return coordis
 
-    monkeypatch.setattr(wa_agent, "get_channel_by_kind", _this_coordis)
+    monkeypatch.setattr(wa_lifecycle, "get_channel_by_kind", _this_coordis)
 
     now = datetime.now(UTC)
     old = (now - timedelta(days=10)).isoformat()
@@ -166,6 +167,6 @@ async def test_sunday_nudge_noop_without_coordis_channel(
     async def _no_coordis(kind: str):
         return None
 
-    monkeypatch.setattr(wa_agent, "get_channel_by_kind", _no_coordis)
+    monkeypatch.setattr(wa_lifecycle, "get_channel_by_kind", _no_coordis)
     text = await wa_agent.sunday_stale_nudge(vault)
     assert text is None

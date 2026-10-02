@@ -210,7 +210,7 @@ def default_vault_client() -> VaultClient:
 
     # Imported here, not at module scope: shared.observability.vault
     # imports this module for the VaultClient protocol.
-    from shared.observability.vault import ObservedVaultClient
+    from shared.observability.interface import ObservedVaultClient
 
     inner: VaultClient
     if settings.lapis_token:
