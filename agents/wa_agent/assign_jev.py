@@ -17,6 +17,7 @@ from shared.models.interface import ChoiceResult, TextModelClient
 from shared.observability.interface import CLASSIFICATION, scope
 
 from agents.wa_agent.assign import (
+    _RECENCY_HINT,
     CHATTER,
     NEW_THREAD,
     AssignmentResult,
@@ -24,6 +25,7 @@ from agents.wa_agent.assign import (
     ThreadInfo,
     _Placement,
     assign_batch,
+    by_last_message,
     format_message_line,
 )
 from agents.wa_agent.messages import BufferedMessage
@@ -41,7 +43,8 @@ class ThreadDecider(Protocol):
 
 def _criteria(threads: list[ThreadInfo]) -> dict[str, str | None]:
     options: dict[str, str | None] = {
-        thread.slug: f"{thread.title}. {thread.summary}".strip() for thread in threads
+        thread.slug: f"{thread.title}. {thread.summary}".strip()
+        for thread in by_last_message(threads)
     }
     options[NEW_THREAD] = "Starts a topic none of the existing threads cover."
     options[CHATTER] = "Content-free small talk: greetings, thanks, emoji-only."
@@ -54,11 +57,13 @@ def _state(
     messages: list[BufferedMessage],
     names: SenderNames,
 ) -> str:
-    thread_lines = "\n".join(f"- {thread.slug}: {thread.title}" for thread in threads) or "(none)"
+    ordered = by_last_message(threads)
+    thread_lines = "\n".join(f"- {thread.slug}: {thread.title}" for thread in ordered) or "(none)"
     message_lines = "\n".join(format_message_line(message, names) for message in messages)
     return (
         f"Channel: {channel_title}\n\n"
-        f"Existing threads:\n{thread_lines}\n\n"
+        f"Existing threads:\n{thread_lines}\n"
+        f"{_RECENCY_HINT}\n\n"
         f"Messages:\n{message_lines}"
     )
 

@@ -16,6 +16,7 @@ from shared.gateway.buffer import to_inbound
 from shared.gateway.channels import is_allowlisted, is_bot_admin
 from shared.gateway.commands import is_group_jid
 from shared.gateway.events import parse_gowa_event
+from shared.gateway.onboarding import has_setup_session
 from shared.gateway.runtime import GatewayRuntime
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,16 @@ async def receive_webhook(raw_body: bytes, signature: str | None, runtime: Gatew
         and event.text.strip().startswith("/")
         and await is_bot_admin(event.sender)
     )
-    if not is_admin_command and not await is_allowlisted(channel):
+    # The answers to a /setup dialogue are plain chat from the admin who
+    # ran it, in a channel that isn't allowlisted until the dialogue ends.
+    is_setup_reply = (
+        not is_admin_command
+        and event.event_type == "message"
+        and bool(event.sender and event.text)
+        and await has_setup_session(channel, event.sender)
+    )
+    is_setup_input = is_admin_command or is_setup_reply
+    if not is_setup_input and not await is_allowlisted(channel):
         return False
 
     async with get_session() as session:
@@ -86,8 +96,10 @@ async def receive_webhook(raw_body: bytes, signature: str | None, runtime: Gatew
             await session.rollback()
             return False
 
-    if is_admin_command:
-        await _dispatch_admin_command(runtime, channel, event.sender, event.text, buffered.id)
+    if is_setup_input:
+        await _dispatch_admin_command(
+            runtime, channel, event.sender, event.text, buffered.id, event.mentions
+        )
         return True
     if event.event_type == "message.reaction" and event.sender:
         await _dispatch_reaction(
@@ -101,13 +113,18 @@ async def receive_webhook(raw_body: bytes, signature: str | None, runtime: Gatew
 
 
 async def _dispatch_admin_command(
-    runtime: GatewayRuntime, channel: str, sender: str | None, text: str, buffer_id: int
+    runtime: GatewayRuntime,
+    channel: str,
+    sender: str | None,
+    text: str,
+    buffer_id: int,
+    mentions: tuple[str, ...] = (),
 ) -> None:
     from shared.gateway.command_handlers import handle_command
 
     assert sender is not None
     try:
-        reply = await handle_command(channel, sender, text, runtime)
+        reply = await handle_command(channel, sender, text, runtime, mentions=list(mentions))
         if reply:
             await runtime.send(channel, reply)
     except Exception:  # noqa: BLE001 - logged, never crashes webhook intake

@@ -25,6 +25,7 @@ from shared.gateway.commands import (
     IngestCommand,
     LinkCommand,
     SetupCommand,
+    SetupMembersCommand,
     StatusCommand,
     ToggleAgentCommand,
     UnwatchCommand,
@@ -75,9 +76,11 @@ def test_parse_command_recognizes_all_shapes():
     assert parse_command("/setup logs") == SetupCommand(kind="logs", title=None)
     assert parse_command("/unwatch") == UnwatchCommand()
     assert parse_command("/status") == StatusCommand()
-    assert parse_command("/link 919876543210@s.whatsapp.net [[Aira]]") == LinkCommand(
-        sender_ref="919876543210@s.whatsapp.net", member_ref="[[Aira]]"
+    assert parse_command("/link @919876543210 [[Aira]]") == LinkCommand(
+        mention="919876543210", member_ref="[[Aira]]"
     )
+    assert parse_command("/link 919876543210@s.whatsapp.net [[Aira]]") is None
+    assert parse_command("/setup-members") == SetupMembersCommand()
     assert parse_command("/health") == HealthCommand()
     assert parse_command("/channels") == ChannelsCommand()
     assert parse_command("/ingest") == IngestCommand()
@@ -320,6 +323,7 @@ async def test_help_lists_commands_and_agent_state(vault: LocalDirClient):
         "/ingest",
         "/health",
         "/link",
+        "/setup-members",
         "/toggle-agent",
     )
     for command in listed:
@@ -383,8 +387,8 @@ async def test_health_reports_last_run_of_each_scheduled_job():
 
 
 async def test_link_writes_members_registry():
-    cmd = LinkCommand(sender_ref="919876543210@s.whatsapp.net", member_ref="[[Aira]]")
-    reply = await gateway.link(cmd, ADMIN)
+    cmd = LinkCommand(mention="919876543210", member_ref="[[Aira]]")
+    reply = await gateway.link(cmd, ADMIN, mentions=["919876543210@s.whatsapp.net"])
     assert "Linked" in reply
 
     async with get_session() as session:
@@ -392,6 +396,69 @@ async def test_link_writes_members_registry():
     assert row is not None
     assert row.member_title == "Aira"
     assert row.linked_by == ADMIN
+
+
+async def test_link_without_a_mention_does_not_write():
+    async with get_session() as session:
+        before = len(list(await session.scalars(select(MembersRegistry))))
+    reply = await gateway.link(
+        LinkCommand(mention="918000000001", member_ref="[[Aira]]"), ADMIN, mentions=[]
+    )
+    assert reply is not None
+    assert "mention" in reply.lower()
+    async with get_session() as session:
+        after = len(list(await session.scalars(select(MembersRegistry))))
+    assert after == before
+
+
+async def test_setup_members_links_confident_matches_and_lists_the_rest(monkeypatch, vault: LocalDirClient):
+    from shared.cms.interface import SeedFileCmsClient
+
+    monkeypatch.setattr(
+        "shared.gateway.command_handlers.default_cms_client",
+        lambda: SeedFileCmsClient(Path(__file__).parent / "fixtures" / "cms" / "members_seed.json"),
+    )
+    async with get_session() as session:
+        session.add(MembersRegistry(wa_identity="919000000003@s.whatsapp.net", member_title="Devansh"))
+        await session.commit()
+    fake_gowa_app.state.group_participants = {
+        PROJECT_GROUP: [
+            {"jid": "4591712054@s.whatsapp.net", "display_name": "Watcher"},
+            {
+                "jid": "919000000001@s.whatsapp.net",
+                "display_name": "Aira J",
+                "lid": "111@lid",
+                "phone_number": "919000000001",
+            },
+            {"jid": "919000000002@s.whatsapp.net", "display_name": "Rohan", "phone_number": "919000000002"},
+            {"jid": "919000000003@s.whatsapp.net", "display_name": "Devansh", "phone_number": "919000000003"},
+        ]
+    }
+    reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/setup-members", vault)
+    assert reply is not None
+    assert "[[Aira]]" in reply
+    assert "Rohan" in reply
+    assert "Member titles:" in reply
+    assert "Aira" in reply and "Zara Khan" in reply
+
+    async with get_session() as session:
+        linked = await session.get(MembersRegistry, "919000000001@s.whatsapp.net")
+        lid = await session.get(MembersRegistry, "111@lid")
+        rohan = await session.get(MembersRegistry, "919000000002@s.whatsapp.net")
+    assert linked is not None and linked.member_title == "Aira" and linked.cms_member_id == "cms-1"
+    assert lid is not None and lid.member_title == "Aira"
+    assert rohan is None
+
+
+async def test_link_uses_the_only_mention_when_the_token_differs():
+    cmd = LinkCommand(mention="Someone", member_ref="[[Aira]]")
+    reply = await gateway.link(cmd, ADMIN, mentions=["111@lid"])
+    assert "[[Aira]]" in reply
+
+    async with get_session() as session:
+        row = await session.get(MembersRegistry, "111@lid")
+    assert row is not None
+    assert row.member_title == "Aira"
 
 
 @pytest.fixture

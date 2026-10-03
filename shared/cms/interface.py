@@ -106,20 +106,37 @@ class CmsClient:
         await self._client.aclose()
 
 
+MEMBER_MATCH_THRESHOLD = 0.75
+
+
+def rank_member(display_name: str, candidates: list[MemberRecord]) -> tuple[MemberRecord, float] | None:
+    """Nearest member title for a WhatsApp display name, and its score
+    in 0..1. None when there is no name or no candidate to compare."""
+    name = display_name.strip().lower()
+    if not name or not candidates:
+        return None
+    best: MemberRecord | None = None
+    best_score = -1.0
+    for candidate in candidates:
+        score = SequenceMatcher(None, name, candidate.title.lower()).ratio()
+        if score > best_score:
+            best, best_score = candidate, score
+    if best is None:
+        return None
+    return best, best_score
+
+
 def fuzzy_match_member(
-    display_name: str, candidates: list[MemberRecord], threshold: float = 0.75
+    display_name: str, candidates: list[MemberRecord], threshold: float = MEMBER_MATCH_THRESHOLD
 ) -> MemberRecord | None:
     """Best member-title match for a WhatsApp display name (Spec: Gateway
     identity - "fuzzy match of display name against member titles"). No
     match below the threshold returns None so the caller can offer to
     create a member page instead of guessing."""
-    best: MemberRecord | None = None
-    best_score = 0.0
-    for candidate in candidates:
-        score = SequenceMatcher(None, display_name.lower(), candidate.title.lower()).ratio()
-        if score > best_score:
-            best, best_score = candidate, score
-    return best if best_score >= threshold else None
+    ranked = rank_member(display_name, candidates)
+    if ranked is None or ranked[1] < threshold:
+        return None
+    return ranked[0]
 
 
 def default_cms_client() -> CmsClientProtocol:

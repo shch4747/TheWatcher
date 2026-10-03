@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from shared.models.interface import TextModelClient
-from shared.wiki.interface import StoredThread, format_timeline_line
+from shared.wiki.interface import StoredThread, apply_member_wikilinks, format_timeline_line
 
 from agents.wa_agent.assign import NewThread, SenderNames, update_thread
 from agents.wa_agent.messages import BufferedMessage
@@ -159,10 +159,11 @@ async def revise_thread(
     update, items_text = await update_thread(
         model, seed_title, seed_summary, items_body, messages, names, set(batch_ids) | known_ids
     )
+    aliases = names.wikilink_aliases(messages)
     return ThreadRevision(
         title=choose_title(update.title, seed_title, messages[0].text),
-        summary=clean_summary(update.summary) or seed_summary,
-        items_body=items_text,
+        summary=apply_member_wikilinks(clean_summary(update.summary) or seed_summary, aliases),
+        items_body=apply_member_wikilinks(items_text, aliases),
         timeline_lines=[timeline_line(m, names) for m in messages],
         participants=participants(messages, names),
         message_ids=batch_ids,

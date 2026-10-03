@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     decision_confidence_threshold: float = 0.6
 
     batch_n: int = 40
+    # How many stored messages `/setup` reads from gowa's history to seed
+    # a newly watched channel (Spec: "the last 100 stored messages").
+    setup_history_count: int = 100
     batch_t_minutes: float = 180.0
     batch_quiet_minutes: float = 5.0
     message_concat_window_minutes: float = 2.0

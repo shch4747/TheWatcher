@@ -31,6 +31,8 @@ from agents.wa_agent.revise import revise_thread
 logger = logging.getLogger(__name__)
 
 NON_INGESTED_KINDS = frozenset({"logs"})
+# Safety bound on `run_drained`: a pathological channel can't loop forever.
+MAX_DRAIN_BATCHES = 100
 
 
 @dataclass
@@ -43,6 +45,19 @@ class BatchResult:
     chatter_count: int = 0
     model_calls: int = 0
     unassigned: int = 0
+
+    def absorb(self, other: BatchResult) -> None:
+        """Fold a later batch of the same channel into this one."""
+        self.message_count += other.message_count
+        self.chatter_count += other.chatter_count
+        self.model_calls += other.model_calls
+        self.unassigned += other.unassigned
+        for mine, theirs in (
+            (self.threads_created, other.threads_created),
+            (self.threads_updated, other.threads_updated),
+            (self.threads_revived, other.threads_revived),
+        ):
+            mine.extend(slug for slug in theirs if slug not in mine)
 
 
 def is_batch_ready(messages: list[BufferedMessage], now: datetime | None = None) -> bool:
@@ -151,6 +166,7 @@ def thread_info(thread: StoredThread) -> ThreadInfo:
         summary=thread.summary.strip(),
         state=thread.state,
         recent_context=recent_timeline_excerpt(thread.timeline),
+        last_message_at=thread.last_message_at,
     )
 
 
@@ -213,6 +229,22 @@ class IngestionPipeline:
     async def run_forced(self, channel_jid: str) -> BatchResult | None:
         messages = await cut_forced_batch(channel_jid)
         return await self._run(channel_jid, messages)
+
+    async def run_drained(self, channel_jid: str) -> BatchResult | None:
+        """Cut forced batches until nothing is pending, as one combined
+        result. A forced cut is capped at `batch_n`, so a backlog bigger
+        than that (a channel's imported history) needs several. Later
+        batches see the threads the earlier ones wrote."""
+        total: BatchResult | None = None
+        for _ in range(MAX_DRAIN_BATCHES):
+            result = await self.run_forced(channel_jid)
+            if result is None:
+                break
+            if total is None:
+                total = result
+            else:
+                total.absorb(result)
+        return total
 
     async def drain_non_ingested(
         self, channel_jid: str, messages: list[BufferedMessage]

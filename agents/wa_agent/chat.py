@@ -1,5 +1,6 @@
 """Chat Agent: @mention the bot -> last 5 messages plus their quoted
-replies -> a text answer, with read-only wiki tools if that isn't enough.
+replies as context -> a text answer to that one message, with read-only
+wiki tools if that isn't enough.
 
 No write-proposals. An @mention or a reply to one of the bot's own
 messages triggers an answer. A mention or reply that is only media
@@ -33,8 +34,10 @@ CONTEXT_LIMIT = 5
 CANNOT_SEE_MEDIA = "I can't see stickers or images. Send a text message."
 _SYSTEM = (
     "You are Watcher, a helpful assistant in a WhatsApp group. "
-    "Answer from the recent messages when they are enough. Be brief. "
-    "If that context is incomplete, look the answer up in the wiki: "
+    "Earlier messages are context only. Reply only to the one message "
+    "that addressed you — do not answer, summarise, or continue the "
+    "context. Be brief. "
+    "If that message's context is incomplete, look the answer up in the wiki: "
     "start by listing this channel's threads, then search or read the "
     "relevant pages. Do not search when the chat already answers it. "
     "If the question is obviously poking fun or trying to waste tokens, "
@@ -92,6 +95,20 @@ def _body(message: InboundMessage) -> str:
     if message.media_kind:
         return f"[{message.media_kind}]"
     return "[empty]"
+
+
+def _answer_prompt(context: list[InboundMessage], addressed: InboundMessage) -> str:
+    """Context messages sit above the one message that mentioned the bot
+    (or replied to it). The model is told to answer only that one."""
+    by_id = {item.message_id: item for item in context}
+    background = [item for item in context if item.message_id != addressed.message_id]
+    lines = "\n".join(_format_line(item, by_id) for item in background) or "(none)"
+    question = _format_line(addressed, by_id)
+    return (
+        f"Context (background only — do not answer these):\n{lines}\n\n"
+        f"Message to answer:\n{question}\n\n"
+        "Reply only to the message to answer. Use the context to understand it."
+    )
 
 
 def _format_line(message: InboundMessage, by_id: dict[str, InboundMessage]) -> str:
@@ -168,9 +185,7 @@ class ChatAgent:
 
     async def _answer(self, message: InboundMessage) -> str:
         context = await _context_for(message)
-        by_id = {item.message_id: item for item in context}
-        lines = "\n".join(_format_line(item, by_id) for item in context)
-        prompt = f"Recent messages:\n{lines}\n\nReply to the latest message."
+        prompt = _answer_prompt(context, message)
         channel = await get_channel(message.channel)
         with scope(phase=CHAT):
             result = await generate_with_tools(

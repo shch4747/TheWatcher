@@ -40,6 +40,19 @@ async def chat_messages(jid: str, limit: int = 100, offset: int = 0) -> dict:
     }
 
 
+@app.get("/group/participants")
+async def group_participants(group_id: str) -> dict:
+    roster = getattr(app.state, "group_participants", {})
+    return {
+        "code": "SUCCESS",
+        "results": {
+            "group_id": group_id,
+            "name": "",
+            "participants": roster.get(group_id, []),
+        },
+    }
+
+
 @app.get("/app/devices")
 async def devices() -> dict:
     return {

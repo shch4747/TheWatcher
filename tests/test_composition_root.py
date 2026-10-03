@@ -28,9 +28,11 @@ def test_setup_jobs_registers_hooks_jobs_and_inbox_consumer():
     assert len(gateway._message_hooks) == 1
     assert len(gateway._reaction_hooks) == 1
     assert len(gateway._health_lines) == 1
+    assert len(gateway.runtime.hooks.channel_watched_hooks) == 1
 
     jobs = scheduler.registered_jobs()
     assert jobs == [
+        "backfill_ingest",
         "expire_proposals_tick",
         "ingest_now",
         "ingest_tick",
@@ -40,5 +42,6 @@ def test_setup_jobs_registers_hooks_jobs_and_inbox_consumer():
     ]
     assert scheduler.job_spec("ingest_now").lock_key == "ingest_tick"
     assert scheduler.job_spec("ingest_tick").lock_key == "ingest_tick"
+    assert scheduler.job_spec("backfill_ingest").lock_key == "ingest_tick"
 
     assert "project_agent" in inbox._consumers

@@ -43,6 +43,43 @@ async def _no_reply(_src_id: str) -> ThreadInfo | None:
     return None
 
 
+async def test_jev_lists_the_newest_thread_first():
+    older = ThreadInfo(
+        slug="older", path="p", title="Older topic", summary="", state="active",
+        last_message_at=NOW - timedelta(days=9),
+    )
+    newer = ThreadInfo(
+        slug="newer", path="p", title="Newer topic", summary="", state="active",
+        last_message_at=NOW,
+    )
+
+    class _Capture:
+        def __init__(self):
+            self.state = ""
+            self.options: list[str] = []
+
+        async def choice_batch(self, state: str, questions: dict) -> dict[str, ChoiceResult]:
+            self.state = state
+            self.options = list(next(iter(questions.values()))[1])
+            return {name: ChoiceResult(option="newer", probabilities={"newer": 0.9}) for name in questions}
+
+    decider = _Capture()
+    await assign_with_jev(
+        [_msg("m1", "still on the new topic")],
+        [older, newer],
+        ScriptedStructuredWorker(),
+        SenderNames(),
+        "Exes",
+        "exes",
+        None,
+        _no_reply,
+        decider,
+    )
+    assert decider.state.index("- newer:") < decider.state.index("- older:")
+    assert "likely to belong to one of the first threads" in decider.state
+    assert decider.options[:2] == ["newer", "older"]
+
+
 async def test_confident_existing_thread_does_not_call_the_worker():
     decider = _Decider({"m1": ChoiceResult(option=HALL.slug, probabilities={HALL.slug: 0.9})})
     worker = ScriptedStructuredWorker()

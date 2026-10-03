@@ -135,6 +135,25 @@ async def test_mention_answers_and_quotes_the_trigger(vault: LocalDirClient):
     assert sent.get("reply_message_id") == "q1"
 
 
+async def test_prompt_answers_only_the_message_that_addressed_the_bot(vault: LocalDirClient):
+    await _buffer(CHANNEL_JID, "ctx-1", "CONTEXT-the hall is Friday", sender="a@x")
+
+    def from_prompt(prompt: str) -> str:
+        if "Message to answer:" not in prompt or "Context (background only" not in prompt:
+            return "UNMARKED"
+        if prompt.index("CONTEXT-the hall is Friday") > prompt.index("Message to answer:"):
+            return "CONTEXT_IS_THE_QUESTION"
+        if "Reply only to the message to answer" not in prompt:
+            return "NO_INSTRUCTION"
+        if "@watcher what's the plan?" not in prompt.split("Message to answer:", 1)[1]:
+            return "MISSED_QUESTION"
+        return "ADDRESSED_ONLY"
+
+    message = _message("@watcher what's the plan?", "q-addressed")
+    reply = await wa_agent.handle_chat_message(message, EchoWorker(from_prompt), vault)
+    assert reply == "ADDRESSED_ONLY"
+
+
 async def test_answer_uses_only_the_last_five_messages(vault: LocalDirClient):
     for i in range(8):
         await _buffer(CHANNEL_JID, f"win-{i}", f"OLD-{i} hall chatter")

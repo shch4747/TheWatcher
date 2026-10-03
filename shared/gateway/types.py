@@ -26,5 +26,15 @@ class MemberLink:
     cms_member_id: str | None = None
 
 
+@dataclass(frozen=True)
+class GroupParticipant:
+    """One person in a WhatsApp group, as gowa reports them."""
+
+    jid: str
+    display_name: str | None = None
+    lid: str | None = None
+    phone_number: str | None = None
+
+
 class SendResult(BaseModel):
     message_id: str | None

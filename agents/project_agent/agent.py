@@ -4,8 +4,10 @@ initiative page, rewrite Status.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
+from shared.cms.interface import default_cms_client
 from shared.gateway.interface import get_channel
 from shared.inbox.interface import THREAD_UPDATE, Inbox, InboxItem
 from shared.models.interface import TextModelClient, generate
@@ -15,6 +17,7 @@ from shared.wiki.interface import (
     ThreadStore,
     VaultClient,
     append_items,
+    apply_member_wikilinks,
     dump_page,
     fenced_content,
     initiative_page_path,
@@ -23,6 +26,8 @@ from shared.wiki.interface import (
     set_fenced,
     upsert_items,
 )
+
+_WIKILINK_TITLE_RE = re.compile(r"\[\[([^\]|#]+)")
 
 logger = logging.getLogger(__name__)
 
@@ -127,20 +132,40 @@ async def apply_thread_items_to_initiative(
     return result
 
 
+async def _member_aliases(page_text: str) -> dict[str, str]:
+    """Titles already on the page, plus the ARIES roster, so a status
+    line that says "Aira" is stored as [[Aira]]."""
+    aliases = {
+        title.strip(): title.strip() for title in _WIKILINK_TITLE_RE.findall(page_text) if title.strip()
+    }
+    try:
+        for member in await default_cms_client().list_members():
+            if member.title.strip():
+                aliases[member.title.strip()] = member.title.strip()
+    except Exception:  # noqa: BLE001 - the page's own wikilinks still apply
+        logger.exception("project agent: member roster unavailable; linking names already on the page")
+    return aliases
+
+
 async def rewrite_status(vault: VaultClient, initiative_path: str, worker_client: TextModelClient) -> None:
     result = await vault.read(initiative_path)
     page = parse_page(result.content)
     task_section_title = _TASK_SECTION_BY_TYPE.get(page.page_type)
+    aliases = await _member_aliases(result.content)
     tasks_body = fenced_content(page, task_section_title) if task_section_title else ""
     decisions_body = fenced_content(page, "Decisions")
+    tasks_body = apply_member_wikilinks(tasks_body, aliases)
+    decisions_body = apply_member_wikilinks(decisions_body, aliases)
 
     prompt = (
         f"Open tasks:\n{tasks_body}\n\nRecent decisions:\n{decisions_body}\n\n"
-        "Write a status update in at most 5 sentences."
+        "Write a status update in at most 5 sentences. "
+        "When you name a member, use their [[wikilink]] exactly as it appears above."
     )
     with scope(phase=PROJECT_AGENT):
         text_result = await generate(worker_client, "worker", prompt)
-    page = set_fenced(page, "Status", text_result.text.strip())
+    status = apply_member_wikilinks(text_result.text.strip(), aliases)
+    page = set_fenced(page, "Status", status)
     await vault.write(initiative_path, dump_page(page), base_revision=result.revision)
 
 

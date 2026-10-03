@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
 
+from shared.cms.interface import MEMBER_MATCH_THRESHOLD, default_cms_client, rank_member
 from shared.config import settings
 from shared.gateway.agent_switch import chat_agent_enabled, toggle_chat_agent
 from shared.gateway.channels import (
@@ -11,6 +12,7 @@ from shared.gateway.channels import (
     is_bot_admin,
     link_member,
     list_channels,
+    resolve_sender,
 )
 from shared.gateway.commands import (
     ChannelsCommand,
@@ -20,9 +22,11 @@ from shared.gateway.commands import (
     IngestCommand,
     LinkCommand,
     SetupCommand,
+    SetupMembersCommand,
     StatusCommand,
     ToggleAgentCommand,
     UnwatchCommand,
+    mentioned_jid,
     parse_command,
 )
 from shared.gateway.onboarding import (
@@ -32,6 +36,7 @@ from shared.gateway.onboarding import (
     unwatch,
 )
 from shared.gateway.runtime import GatewayRuntime
+from shared.gateway.types import GroupParticipant
 from shared.scheduler.interface import due_jobs, ledger_tail, registered_jobs, run_job
 from shared.wiki.interface import LapisClient, VaultClient, check_vault_connection, default_vault_client
 
@@ -46,7 +51,8 @@ _HELP = "\n".join(
         "/status — this channel's kind, initiative, and cursor",
         "/ingest — process unprocessed messages now, ignoring batch limits",
         "/health — connectivity and the last outcome of each job",
-        "/link <wa-jid> [[Member Title]] — link a WhatsApp identity to a member",
+        "/setup-members — match this group's members to the ARIES roster",
+        "/link @member [[Member Title]] — link the mentioned person to a member",
         "/toggle-agent — turn chat replies on or off",
     ]
 )
@@ -162,12 +168,98 @@ async def health(runtime: GatewayRuntime) -> str:
     return "\n".join(lines)
 
 
-async def link(cmd: LinkCommand, requested_by: str) -> str:
+async def link(cmd: LinkCommand, requested_by: str, mentions: list[str] | None = None) -> str:
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /link."
+    wa_identity = mentioned_jid(cmd.mention, mentions or [])
+    if wa_identity is None:
+        return "Mention the person in this message, then [[Member Title]]. A typed JID is not enough."
     member_title = cmd.member_ref.strip("[]")
-    await link_member(cmd.sender_ref, member_title, linked_by=requested_by)
-    return f"Linked {cmd.sender_ref} to [[{member_title}]]."
+    cms_id = None
+    try:
+        member = await default_cms_client().get_member(member_title)
+    except Exception:  # noqa: BLE001 - a manual link still stands if the roster is down
+        member = None
+    if member is not None:
+        cms_id = member.cms_id
+        member_title = member.title
+    await link_member(wa_identity, member_title, cms_id, linked_by=requested_by)
+    return f"Linked @{cmd.mention} to [[{member_title}]]."
+
+
+def _participant_label(person: GroupParticipant) -> str:
+    if person.display_name:
+        return person.display_name
+    phone = (person.phone_number or "").split("@", 1)[0]
+    return phone or "unnamed"
+
+
+async def _link_identity(wa_identity: str, title: str, cms_id: str | None, linked_by: str) -> None:
+    if await resolve_sender(wa_identity) is None:
+        await link_member(wa_identity, title, cms_id, linked_by=linked_by)
+
+
+async def setup_members(channel_jid: str, requested_by: str, runtime: GatewayRuntime) -> str:
+    """Match every group participant to the ARIES roster. A confident
+    fuzzy match is linked immediately. Everyone else is listed so an
+    admin can /link them by mentioning them."""
+    if not await is_bot_admin(requested_by):
+        return "Only Bot Admins can /setup-members."
+    try:
+        participants = await runtime.group_participants(channel_jid)
+    except Exception as exc:  # noqa: BLE001 - the admin needs the failure, not a traceback
+        return f"Couldn't list this group's members: {exc}"
+    try:
+        roster = await default_cms_client().list_members()
+    except Exception as exc:  # noqa: BLE001
+        return f"Couldn't read the ARIES member list: {exc}"
+
+    bot = await runtime.bot_jid()
+    linked: list[str] = []
+    unsure: list[str] = []
+    already = 0
+    for person in participants:
+        identities = [person.jid]
+        if person.lid and person.lid not in identities:
+            identities.append(person.lid)
+        if bot and bot in identities:
+            continue
+        existing = None
+        for identity in identities:
+            existing = await resolve_sender(identity)
+            if existing is not None:
+                break
+        if existing is not None:
+            for identity in identities:
+                await _link_identity(identity, existing.member_title, existing.cms_member_id, requested_by)
+            already += 1
+            continue
+        ranked = rank_member(person.display_name or "", roster)
+        if ranked is not None and ranked[1] >= MEMBER_MATCH_THRESHOLD:
+            member, _score = ranked
+            for identity in identities:
+                await link_member(identity, member.title, member.cms_id, linked_by=requested_by)
+            linked.append(f"- {_participant_label(person)} → [[{member.title}]]")
+            continue
+        hint = f" (nearest [[{ranked[0].title}]])" if ranked is not None else ""
+        unsure.append(f"- {_participant_label(person)}{hint}")
+
+    lines = [
+        "*Members*",
+        f"Linked {len(linked)}, already linked {already}, {len(unsure)} need a manual /link.",
+    ]
+    if linked:
+        lines += ["", "Linked:", *linked]
+    if unsure:
+        titles = ", ".join(member.title for member in roster) or "(roster is empty)"
+        lines += [
+            "",
+            "Mention each of these, then /link @them [[Member Title]]:",
+            *unsure,
+            "",
+            f"Member titles: {titles}",
+        ]
+    return "\n".join(lines)
 
 
 async def handle_command(
@@ -176,6 +268,7 @@ async def handle_command(
     text: str,
     runtime: GatewayRuntime,
     vault: VaultClient | None = None,
+    mentions: list[str] | None = None,
 ) -> str | None:
     """Route a parsed command to its handler. `vault` defaults to
     `default_vault_client()`; pass a real client in tests."""
@@ -183,15 +276,19 @@ async def handle_command(
     vault = vault or default_vault_client()
 
     if cmd is None:
-        return await continue_setup_session(channel_jid, text, vault)
+        return await continue_setup_session(
+            channel_jid, text, vault, on_watching=runtime.on_channel_watched, mentions=mentions
+        )
+    if isinstance(cmd, SetupMembersCommand):
+        return await setup_members(channel_jid, sender, runtime)
     if isinstance(cmd, SetupCommand):
-        return await setup(channel_jid, sender, cmd, vault)
+        return await setup(channel_jid, sender, cmd, vault, on_watching=runtime.on_channel_watched)
     if isinstance(cmd, UnwatchCommand):
         return await unwatch(channel_jid, sender, target_jid=cmd.jid)
     if isinstance(cmd, StatusCommand):
         return await status(channel_jid)
     if isinstance(cmd, LinkCommand):
-        return await link(cmd, sender)
+        return await link(cmd, sender, mentions)
     if isinstance(cmd, HealthCommand):
         return await health(runtime)
     if isinstance(cmd, ChannelsCommand):

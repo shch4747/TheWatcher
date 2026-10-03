@@ -63,6 +63,7 @@ from shared.wiki.lint import (
     render_lint_report,
     repair_missing_sections,
 )
+from shared.wiki.names import apply_member_wikilinks
 from shared.wiki.parser import Page, Section, WikiParseError, dump_page, parse_page, parse_page_lenient
 from shared.wiki.schema import SCHEMA_BY_TYPE, Frontmatter, canonical_section_title, owner_of
 from shared.wiki.templates import (
@@ -92,6 +93,7 @@ __all__ = [
     "ThreadStore",
     "format_timeline_line",
     "timeline_src_ids",
+    "apply_member_wikilinks",
     "Item",
     "format_item_line",
     "parse_item_line",

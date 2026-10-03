@@ -104,6 +104,18 @@ class GowaClient:
         results = resp.json().get("results", {})
         return results.get("data", [])
 
+    async def group_participants(self, group_id: str) -> list[dict]:
+        """`GET /group/participants` — jid, display_name, lid, phone_number."""
+        resp = await self._client.get(
+            f"{self.base_url}/group/participants",
+            params={"group_id": group_id},
+            headers=self._headers(),
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results") or {}
+        participants = results.get("participants") or []
+        return participants if isinstance(participants, list) else []
+
     async def list_groups(self) -> list[dict]:
         """Every group this session is in, with its display `Name` -
         used to resolve a channel jid to something a human can read

@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from agents.wa_agent.assign import NewThread, SenderNames, ThreadUpdate
+from agents.wa_agent.assign import ItemOut, NewThread, SenderNames, ThreadUpdate
 from agents.wa_agent.interface import BufferedMessage, revise_thread
 from agents.wa_agent.revise import SUMMARY_MAX_CHARS, TITLE_MAX_CHARS
 from shared.models.schemas import StructuredResult
@@ -111,6 +111,23 @@ async def test_summaries_are_capped_and_keep_what_members_said(branch):
     revision = await _revise("Title", branch=branch, seed_title="s", first_text="t", summary=long)
     assert len(revision.summary) <= SUMMARY_MAX_CHARS
     assert "919244352208@s.whatsapp.net" in revision.summary  # ADR-0012: no redaction
+
+
+async def test_linked_member_names_in_prose_become_wikilinks():
+    model = FixedUpdate("Title", "Aira J will book the hall. Aira (91@s.whatsapp.net) confirmed.")
+    model.update = ThreadUpdate(
+        title="Title",
+        summary=model.update.summary,
+        items=[ItemOut(kind="task", text="Aira J books the hall", src_ids=["m1"])],
+    )
+    message = _message("hello")
+    message.sender_name = "Aira J"
+    names = SenderNames(members={"91@s.whatsapp.net": "Aira"})
+    revision = await revise_thread(model, [message], names, current=_existing("Seed"))
+    assert revision.summary == "[[Aira]] will book the hall. [[Aira]] confirmed."
+    assert "[[Aira]] books the hall" in revision.items_body
+    assert "[[Aira]]" in revision.timeline_lines[0]
+    assert revision.participants == ["[[Aira]]"]
 
 
 async def test_revision_carries_the_timeline_and_ids_to_add():

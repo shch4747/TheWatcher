@@ -136,6 +136,15 @@ async def test_event_uses_logistics_section(vault: LocalDirClient):
     assert "Book the hall" in page.section("Logistics").body
 
 
+async def test_rewrite_status_replaces_member_names_with_wikilinks(vault: LocalDirClient):
+    page = INITIATIVE_PAGE.replace('lead: "[[Devansh]]"', 'lead: "[[Aira]]"')
+    await vault.create("projects/watcher.md", page)
+    await project_agent.rewrite_status(vault, "projects/watcher.md", ScriptedWorker("Aira booked the hall."))
+
+    body = parse_page((await vault.read("projects/watcher.md")).content).section("Status").body
+    assert "[[Aira]] booked the hall." in body
+
+
 async def test_rewrite_status_replaces_managed_section(vault: LocalDirClient):
     await vault.create("projects/watcher.md", INITIATIVE_PAGE)
     await project_agent.rewrite_status(vault, "projects/watcher.md", ScriptedWorker("Great progress."))

@@ -74,6 +74,13 @@ through the page editor, which enforces Section Owners and Fences. An
 agent's Inbox is its page `inbox/<agent>.md`, reached only through
 `shared/inbox` (ADR-0014).
 
+`/setup` seeds a new channel without the Gateway knowing about agents:
+once the channel is watched the Gateway reads its history into the
+buffer and fires a *channel-watched* hook; `main.py` (the composition
+root) answers it by queueing the `backfill_ingest` job, which runs the
+WA Agent's `IngestionPipeline.run_drained` for that channel under the
+same lock as `ingest_tick`.
+
 Observability is a leaf: `shared/observability` depends on `shared.db`,
 `shared.config` and `shared.wiki` (the client protocol it wraps) and on
 nothing above them. In particular it never imports `shared.gateway` -

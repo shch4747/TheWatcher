@@ -40,7 +40,14 @@ from shared.gateway.command_handlers import (
 )
 from shared.gateway.onboarding import SETUP_STEPS, continue_setup_session, setup, unwatch
 from shared.gateway.proposals import ProposalRecord, ProposalStore
-from shared.gateway.runtime import GatewayRuntime, HealthLine, HookRegistry, MessageHook, ReactionHook
+from shared.gateway.runtime import (
+    ChannelWatchedHook,
+    GatewayRuntime,
+    HealthLine,
+    HookRegistry,
+    MessageHook,
+    ReactionHook,
+)
 from shared.gateway.types import ChannelInfo, MemberLink, SendResult
 from shared.gateway.webhook import receive_webhook as _receive_webhook
 from shared.gateway.webhook import verify_signature
@@ -59,6 +66,11 @@ def register_message_hook(hook: MessageHook) -> None:
 
 def register_reaction_hook(hook: ReactionHook) -> None:
     runtime.hooks.register_reaction_hook(hook)
+
+
+def register_channel_watched_hook(hook: ChannelWatchedHook) -> None:
+    """Called after `/setup` has watched a channel and read its history."""
+    runtime.hooks.register_channel_watched_hook(hook)
 
 
 def register_health_line(line: HealthLine) -> None:
@@ -87,9 +99,13 @@ async def bot_jid() -> str | None:
 
 
 async def handle_command(
-    channel_jid: str, sender: str, text: str, vault: VaultClient | None = None
+    channel_jid: str,
+    sender: str,
+    text: str,
+    vault: VaultClient | None = None,
+    mentions: list[str] | None = None,
 ) -> str | None:
-    return await _handle_command(channel_jid, sender, text, runtime, vault=vault)
+    return await _handle_command(channel_jid, sender, text, runtime, vault=vault, mentions=mentions)
 
 
 async def health() -> str:
@@ -129,6 +145,8 @@ __all__ = [
     "runtime",
     "register_message_hook",
     "register_reaction_hook",
+    "register_channel_watched_hook",
+    "ChannelWatchedHook",
     "register_health_line",
     "clear_hooks",
     "verify_signature",

@@ -89,9 +89,23 @@ def test_assignment_prompt_lists_threads_messages_and_the_next_new_id():
     assert "Description: Hall availability for the demo." in prompt
     assert "### 20260102-old [stale]" in prompt
     assert "New threads are numbered from new-3." in prompt
-    # the registry title wins over the WhatsApp display name, and the
-    # jid is kept alongside it (ADR-0012: no PII stripping)
-    assert "- id=m1 | 2026-09-18 10:00 | Aira (919000000001@s.whatsapp.net) | any news on the hall?" in prompt
+    # a linked sender is already their wikilink; the display name and jid stay out of the prompt
+    assert "- id=m1 | 2026-09-18 10:00 | [[Aira]] | any news on the hall?" in prompt
+    assert "most recent message first" in prompt
+    assert "likely to belong to one of the first threads" in prompt
+
+
+def test_assignment_prompt_lists_the_newest_thread_first():
+    older = ThreadInfo(
+        slug="older", path="p", title="Older topic", summary="", state="active",
+        last_message_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    newer = ThreadInfo(
+        slug="newer", path="p", title="Newer topic", summary="", state="active",
+        last_message_at=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    prompt = build_assignment_prompt("C", "other", None, [older, newer], [], [], 1, SenderNames())
+    assert prompt.index("### newer ") < prompt.index("### older ")
 
 
 def test_assignment_prompt_falls_back_to_display_name_then_jid():
@@ -298,8 +312,8 @@ def test_thread_update_prompt_shows_current_state_and_new_messages_with_sender_a
     assert "Thread title: Booking the hall" in prompt
     assert "Old summary." in prompt
     assert "^i-9f3c" in prompt  # so the model can reuse the id
-    assert "Members (the only names allowed in owner): Aira" in prompt
-    assert "- 2026-09-18 10:00 — Aira (919000000001@s.whatsapp.net): done, booked it [src:: m1]" in prompt
+    assert "Members (the only names allowed in owner): [[Aira]]" in prompt
+    assert "- 2026-09-18 10:00 — [[Aira]]: done, booked it [src:: m1]" in prompt
 
 
 async def test_update_thread_renders_items_in_the_grammar():

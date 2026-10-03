@@ -61,14 +61,39 @@ process start, so `docker compose up -d` after editing it is enough.
 
 - `/setup [project|event|coordis|exes|research|all|other|logs] [<Title>]`
   - register the group this is sent from as a watched channel.
-  `project`/`event` open a lead/brief/timeline dialogue if the
-  initiative page doesn't exist yet; `coordis`/`exes`/`research`/`all`/
-  `logs` are singletons (a second `/setup` of the same kind is
-  refused). `logs` is where all debug logging and error reporting goes
-  (job-failure alerts, and any future debug output) - never coordis,
-  which is reserved for Proposals a Bot Admin needs to act on with a
-  👍. Set it up once with `/setup logs` from whatever group you want
-  the bot's noise in.
+  `coordis`/`exes`/`research`/`all`/`logs` are singletons (a second
+  `/setup` of the same kind is refused). `logs` is where all debug
+  logging and error reporting goes (job-failure alerts, and any future
+  debug output) - never coordis, which is reserved for Proposals a Bot
+  Admin needs to act on with a 👍. Set it up once with `/setup logs`
+  from whatever group you want the bot's noise in.
+
+  **Project and event channels** (`/setup project <Title>`,
+  `/setup event <Title>`) are linked to `projects/<slug>.md` or
+  `events/<slug>.md`. If that page already exists the channel is simply
+  linked to it. If not, the bot asks three questions in the group - the
+  lead (a name, an @tag, or "me"), the brief, and the timeline - and
+  creates the page from the answers, then watches the channel. Answer
+  with plain messages from the admin who ran `/setup` (no quoting
+  needed; anyone else's messages are ignored until it's done). Say
+  `skip` to leave the brief or timeline blank. The timeline is kept at
+  the end of the page's `## Brief`; a lead that matches an ARIES member
+  is written as that member's title, and one it can't place becomes
+  `[[Unassigned]]` - never a phone number. Running `/setup` again in the
+  group abandons a dialogue that was left half-finished.
+
+  **Chat history.** Once a channel is watched (any kind except `logs`),
+  `/setup` reads its last `SETUP_HISTORY_COUNT` (default 100) stored
+  messages from gowa and queues a first ingest of them, which the bot
+  reports on its reply (`Read 87 message(s) from the chat history;
+  ingesting them now.`). That ingest is the `backfill_ingest` job: like
+  `/ingest` it ignores the batch thresholds, but it keeps cutting
+  batches until nothing is left, and it shares `ingest_tick`'s lock. It
+  starts within one 30 s scheduler poll, and its cost report goes to
+  the logs channel like any other run. History is best-effort: gowa
+  only has what the linked device has seen, and if it can't be read the
+  reply says so and only new messages are ingested. Re-running `/setup`
+  never duplicates messages already buffered.
 - `/channels` - list every watched channel with its jid, kind, and
   initiative - the jid is what `/unwatch <jid>` needs.
 - `/unwatch` - stop watching the channel this is sent from.
@@ -85,8 +110,13 @@ process start, so `docker compose up -d` after editing it is enough.
   counts, and the outcome of each scheduled job's last run
   (`ingest_tick`, `lifecycle_tick`, `project_agent_tick`) - check this
   proactively any time, from your phone.
-- `/link <wa-jid> [[Member Title]]` - manually link a WhatsApp identity
-  to a Members Registry page, bypassing fuzzy-match Proposals.
+- `/setup-members` - list this group's WhatsApp members, fuzzy-match
+  each display name against the ARIES member roster, and link the
+  confident ones. Everyone else is printed (with the roster's titles)
+  so you can assign them yourself.
+- `/link @member [[Member Title]]` - link the person you @mention in
+  that message. A typed JID is ignored; the mention has to be a real
+  WhatsApp mention.
 - `/toggle-agent` - switch chat replies on or off. Off until the first
   toggle, including after a fresh database. Ingest and the other
   commands keep working either way.
@@ -226,8 +256,9 @@ so a health-check loop can call them unconditionally.
 ## Recurring jobs
 
 `main.py` (what the Dockerfile actually runs, not raw `uvicorn`) wires
-six Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
-min), `ingest_now` (`/ingest` only), `project_agent_tick` (works through
+seven Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
+min), `ingest_now` (`/ingest` only), `backfill_ingest` (the first full
+ingest of a channel `/setup` just imported history for), `project_agent_tick` (works through
 `inbox/project_agent.md`, every 2 min - or on the next 30 s poll when a
 triggering Inbox Item is posted, ADR-0014), `lifecycle_tick`
 (stale/ended handling, daily), `sunday_nudge_tick` (daily, only acts on

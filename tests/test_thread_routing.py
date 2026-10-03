@@ -374,10 +374,9 @@ async def test_timeline_and_participants_use_member_name_then_display_name(
         "[[Aira]]",
     ]
 
-    # the model sees the resolved name plus the jid, so it can tell
-    # same-named people apart without losing the number
+    # a linked sender is a wikilink; an unlinked one keeps the display name and jid
     prompt = worker.assignment_prompts[0]
-    assert "Aira (919000000001@s.whatsapp.net)" in prompt
+    assert "[[Aira]]" in prompt
     assert "Rohan (919000000002@s.whatsapp.net)" in prompt
     assert "2026-09-18 10:02" in prompt
 

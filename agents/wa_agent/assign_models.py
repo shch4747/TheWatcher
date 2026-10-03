@@ -61,6 +61,14 @@ class SenderNames:
         name = title or m.sender_name
         return f"{name} ({m.sender})" if name else m.sender
 
+    def prompt_label(self, m: BufferedMessage) -> str:
+        """Speaker token a model sees. A linked member is already their
+        [[wikilink]]; an unlinked sender keeps the display name and jid."""
+        title = self.members.get(m.sender)
+        if title:
+            return f"[[{title}]]"
+        return self.prompt_name(m)
+
     def member_titles(self, messages: list[BufferedMessage]) -> list[str]:
         seen: list[str] = []
         for m in messages:
@@ -68,6 +76,23 @@ class SenderNames:
             if title and title not in seen:
                 seen.append(title)
         return seen
+
+    def wikilink_aliases(self, messages: list[BufferedMessage]) -> dict[str, str]:
+        """Surface forms that should become `[[title]]` in wiki prose:
+        the member title, the WhatsApp display name, and the
+        `Name (jid)` line the prompt showed the model."""
+        aliases: dict[str, str] = {}
+        for message in messages:
+            title = self.members.get(message.sender)
+            if not title:
+                continue
+            aliases[title] = title
+            if message.sender_name and message.sender_name.strip():
+                aliases[message.sender_name.strip()] = title
+            shown = self.prompt_name(message)
+            if shown != title:
+                aliases[shown] = title
+        return aliases
 
 
 @dataclass

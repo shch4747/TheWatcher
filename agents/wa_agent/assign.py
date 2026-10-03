@@ -30,13 +30,13 @@ import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import partial
 
 from shared.config import settings
 from shared.models.interface import TextModelClient, estimate_tokens, generate_structured
 from shared.observability.interface import CLASSIFICATION, SUMMARISATION, scope
-from shared.wiki.interface import Item, format_item_line, parse_items
+from shared.wiki.interface import Item, apply_member_wikilinks, format_item_line, parse_items
 
 from agents.wa_agent.assign_models import (
     CHATTER,
@@ -126,13 +126,15 @@ THREAD_UPDATE_SYSTEM_PROMPT = (
     "title yet, at most 5 plain words naming the concrete topic.\n"
     "summary: 2-5 sentences, third person, like minutes - what the thread is about and where it "
     "stands now. Fold the new messages into the existing summary; keep facts that still hold, "
-    "drop ones superseded. Refer to people by the names shown. Never invent a decision, owner or "
+    "drop ones superseded. When you name a linked member, copy their [[wikilink]] exactly as "
+    "shown. Never write a display name, jid, or phone number for someone who has one. "
+    "Never invent a decision, owner or "
     "date that is not in the messages. No bullet points, no [src] pointers.\n"
     "items: the complete list of tasks, decisions, resources and questions for this thread - "
     "existing ones (updated, or unchanged with their block_id reused) plus new ones from the new "
     "messages. Chatter yields no item. Every item needs src_ids from the messages it comes from. "
-    "owner (for a task) or the asker (for a question) goes in owner, and only as a name listed "
-    "under 'Members'; leave it null if unsure. A decision is done; a task is done only when the "
+    "owner (for a task) or the asker (for a question) goes in owner, and only as a [[wikilink]] "
+    "listed under 'Members'; leave it null if unsure. A decision is done; a task is done only when the "
     "messages say so. due is YYYY-MM-DD and only when a date is actually given.\n\n"
     f"Some messages are from the bot itself ({settings.bot_mention_name}) - its proposals, "
     "confirmations, question prompts and status notices. Those are the bot's own bookkeeping, "
@@ -155,16 +157,37 @@ def _one_line(text: str) -> str:
 
 def format_message_line(m: BufferedMessage, names: SenderNames) -> str:
     reply = f" | reply_to={m.replied_to_id}" if m.replied_to_id else ""
-    return f"- id={m.message_id} | {_ts(m.when)} | {names.prompt_name(m)}{reply} | {_one_line(m.text)}"
+    return f"- id={m.message_id} | {_ts(m.when)} | {names.prompt_label(m)}{reply} | {_one_line(m.text)}"
 
 
 def format_context_line(m: BufferedMessage, names: SenderNames) -> str:
     """A message as a thread's "Recent:" line inside the prompt (same
     shape as a Timeline line, minus the src tag)."""
-    return f"- {_ts(m.when)} — {names.prompt_name(m)}: {_one_line(m.text)}"
+    return f"- {_ts(m.when)} — {names.prompt_label(m)}: {_one_line(m.text)}"
 
 
 MAX_SHRINK = 3
+
+_RECENCY_HINT = (
+    "Listed with the most recent message first. A message that is not a reply "
+    "is likely to belong to one of the first threads."
+)
+
+
+def by_last_message(threads: list[ThreadInfo]) -> list[ThreadInfo]:
+    """Newest last-message first. A thread minted in this batch has no
+    stamp yet and sorts ahead of persisted ones; a persisted thread with
+    no stamp sorts last."""
+    newest = datetime.max.replace(tzinfo=UTC)
+    oldest = datetime.min.replace(tzinfo=UTC)
+
+    def key(thread: ThreadInfo) -> datetime:
+        if thread.last_message_at is not None:
+            when = thread.last_message_at
+            return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+        return newest if not thread.path else oldest
+
+    return sorted(threads, key=key, reverse=True)
 
 
 def _threads_block(threads: list[ThreadInfo], shrink: int) -> str:
@@ -174,8 +197,9 @@ def _threads_block(threads: list[ThreadInfo], shrink: int) -> str:
     if not threads:
         return "(none yet - every message either starts a new thread or is chatter)"
     parts = []
-    for t in threads:
-        head = f"### {t.slug} [{t.state}]\nTitle: {t.title}"
+    for t in by_last_message(threads):
+        when = f" last {_ts(t.last_message_at)}" if t.last_message_at else ""
+        head = f"### {t.slug} [{t.state}]{when}\nTitle: {t.title}"
         if t.summary and shrink < 3:
             head += f"\nDescription: {t.summary}"
         show_recent = t.recent_context and (shrink == 0 or (shrink == 1 and t.state != "stale"))
@@ -243,7 +267,7 @@ def build_assignment_prompt(
     assigned_block = ""
     if already_assigned:
         assigned_lines = "\n".join(
-            f"- id={m.message_id} | {_ts(m.when)} | {names.prompt_name(m)} | {_one_line(m.text)} -> {slug}"
+            f"- id={m.message_id} | {_ts(m.when)} | {names.prompt_label(m)} | {_one_line(m.text)} -> {slug}"
             for m, slug in already_assigned
         )
         assigned_block = (
@@ -261,7 +285,7 @@ def build_assignment_prompt(
         for target, replies in followers.items():
             for m in replies:
                 reply_lines.append(
-                    f"- (in reply to {target}) {_ts(m.when)} | {names.prompt_name(m)} | {_one_line(m.text)}"
+                    f"- (in reply to {target}) {_ts(m.when)} | {names.prompt_label(m)} | {_one_line(m.text)}"
                 )
         if reply_lines:
             reply_block = (
@@ -275,7 +299,7 @@ def build_assignment_prompt(
         f"{header}\n\n"
         "## Existing threads\n"
         "Assign to these by slug. A [stale] thread has been quiet for a while but is still the "
-        "right home for a message that continues it.\n\n"
+        f"right home for a message that continues it. {_RECENCY_HINT}\n\n"
         f"{_threads_block(threads, shrink)}"
         f"{assigned_block}{reply_block}\n\n"
         f"## Messages to assign\n"
@@ -532,6 +556,7 @@ async def assign_batch(
                 declared[nt.id] = (int(m_id.group(1)), nt)
         valid_refs = known | set(carried) | set(declared) | {CHATTER}
         by_id = {a.message_id: a.thread for a in response.assignments}
+        last_at: dict[str, datetime] = {}
         for m in chunk:
             ref = by_id.get(m.message_id)
             if ref is None or ref not in valid_refs:
@@ -541,6 +566,9 @@ async def assign_batch(
             _put(m, _bucket_key(ref))
             if ref in declared or ref in carried:
                 new_lines.setdefault(ref, []).append(format_context_line(m, names))
+                previous = last_at.get(ref)
+                if previous is None or m.when > previous:
+                    last_at[ref] = m.when
 
         # Fold this chunk's new threads into the next chunk's context.
         for ref, (index, nt) in declared.items():
@@ -548,7 +576,12 @@ async def assign_batch(
                 continue  # declared but never used - drop it
             result.new_threads[_bucket_key(ref)] = nt
             carried[ref] = ThreadInfo(
-                slug=ref, path="", title=nt.title.strip(), summary=nt.description.strip(), state="active"
+                slug=ref,
+                path="",
+                title=nt.title.strip(),
+                summary=nt.description.strip(),
+                state="active",
+                last_message_at=last_at.get(ref),
             )
             context_threads.append(carried[ref])
             next_new_index = max(next_new_index, index + 1)
@@ -556,6 +589,8 @@ async def assign_batch(
         for ref, info in carried.items():
             if ref in new_lines:
                 info.recent_context = "\n".join(new_lines[ref][-8:])
+                if ref in last_at:
+                    info.last_message_at = last_at[ref]
 
     return _finish()
 
@@ -617,15 +652,23 @@ def build_thread_update_prompt(
     names: SenderNames,
 ) -> str:
     member_titles = names.member_titles(messages)
-    members_line = ", ".join(member_titles) if member_titles else "(no linked members among the senders)"
-    existing_items = "\n".join(format_item_line(i) for i in parse_items(items_body)) or "(none)"
+    members_line = (
+        ", ".join(f"[[{title}]]" for title in member_titles)
+        if member_titles
+        else "(no linked members among the senders)"
+    )
+    aliases = names.wikilink_aliases(messages)
+    existing_items = "\n".join(
+        format_item_line(i) for i in parse_items(apply_member_wikilinks(items_body, aliases))
+    ) or "(none)"
+    linked_summary = apply_member_wikilinks(summary, aliases)
     new_lines = "\n".join(
-        f"- {_ts(m.when)} — {names.prompt_name(m)}: {_one_line(m.text)} [src:: {', '.join(m.src_ids)}]"
+        f"- {_ts(m.when)} — {names.prompt_label(m)}: {_one_line(m.text)} [src:: {', '.join(m.src_ids)}]"
         for m in messages
     )
     return (
         f"Thread title: {title or '(none yet)'}\n\n"
-        f"Current summary:\n{summary or '(none yet)'}\n\n"
+        f"Current summary:\n{linked_summary or '(none yet)'}\n\n"
         f"Current items (reuse an item's ^block_id when it is the same item):\n{existing_items}\n\n"
         f"Members (the only names allowed in owner): {members_line}\n\n"
         f"New messages:\n{new_lines}"

@@ -57,3 +57,6 @@ class ThreadInfo:
     # Last few Timeline lines, capped at settings.thread_context_max_chars
     # - what the assignment prompt shows as "Recent:" for this thread.
     recent_context: str = ""
+    # When the thread's own last message was sent. Assignment lists
+    # threads newest-first from this; None sorts after every dated thread.
+    last_message_at: datetime | None = None

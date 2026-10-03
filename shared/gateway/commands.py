@@ -48,8 +48,16 @@ class HelpCommand:
 
 @dataclass(frozen=True)
 class LinkCommand:
-    sender_ref: str
+    """`mention` is the token after @. The WhatsApp JID comes from the
+    message's mention list, not from this token."""
+
+    mention: str
     member_ref: str
+
+
+@dataclass(frozen=True)
+class SetupMembersCommand:
+    pass
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,7 @@ Command = (
     | UnwatchCommand
     | StatusCommand
     | LinkCommand
+    | SetupMembersCommand
     | HealthCommand
     | ChannelsCommand
     | IngestCommand
@@ -75,7 +84,11 @@ _SETUP_RE = re.compile(
 )
 _UNWATCH_RE = re.compile(r"^/unwatch(?:\s+(?P<jid>\S+))?\s*$", re.IGNORECASE)
 _STATUS_RE = re.compile(r"^/status\s*$", re.IGNORECASE)
-_LINK_RE = re.compile(r"^/link\s+(?P<sender>\S+)\s+(?P<member>\[\[[^\]]+\]\])\s*$", re.IGNORECASE)
+_LINK_RE = re.compile(
+    r"^/link\s+@(?P<mention>\S+)\s+(?P<member>\[\[[^\]]+\]\])\s*$",
+    re.IGNORECASE,
+)
+_SETUP_MEMBERS_RE = re.compile(r"^/setup-members\s*$", re.IGNORECASE)
 _HEALTH_RE = re.compile(r"^/health\s*$", re.IGNORECASE)
 _CHANNELS_RE = re.compile(r"^/channels\s*$", re.IGNORECASE)
 _INGEST_RE = re.compile(r"^/ingest\s*$", re.IGNORECASE)
@@ -88,6 +101,8 @@ def parse_command(text: str) -> Command | None:
     if not text.startswith("/"):
         return None
 
+    if _SETUP_MEMBERS_RE.match(text):
+        return SetupMembersCommand()
     if m := _SETUP_RE.match(text):
         kind = (m.group("kind") or "other").lower()
         title = m.group("title").strip() if m.group("title") else None
@@ -97,7 +112,7 @@ def parse_command(text: str) -> Command | None:
     if _STATUS_RE.match(text):
         return StatusCommand()
     if m := _LINK_RE.match(text):
-        return LinkCommand(sender_ref=m.group("sender"), member_ref=m.group("member"))
+        return LinkCommand(mention=m.group("mention"), member_ref=m.group("member"))
     if _HEALTH_RE.match(text):
         return HealthCommand()
     if _CHANNELS_RE.match(text):
@@ -108,6 +123,25 @@ def parse_command(text: str) -> Command | None:
         return ToggleAgentCommand()
     if _HELP_RE.match(text):
         return HelpCommand()
+    return None
+
+
+def mentioned_jid(token: str, mentions: list[str]) -> str | None:
+    """The JID of the person @mentioned in a `/link` message.
+
+    WhatsApp puts `@919876543210` in the body and the JID (phone or
+    `@lid`) in `mentions`. The local part is preferred. When the body
+    token and the JID differ, a message that mentions exactly one person
+    still resolves. A typed JID with an empty mention list does not.
+    """
+    cleaned = [raw.strip() for raw in mentions if raw.strip()]
+    key = token.strip().lstrip("@").split("@", 1)[0].lower()
+    if key:
+        for raw in cleaned:
+            if raw.split("@", 1)[0].lower() == key:
+                return raw
+    if len(cleaned) == 1:
+        return cleaned[0]
     return None
 
 
