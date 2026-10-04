@@ -5,6 +5,8 @@ import { searchArxivMulti } from "../sources/arxiv.js";
 import { extractHnTopics, filterTrending } from "../relevance.js";
 import { fromHfPaper, fromArxivPaper, fromHnStory, dedupeByUrl, type CandidateItem } from "../candidates.js";
 import { writeTrendingFeed, logPushes } from "../pages.js";
+import { config } from "../config.js";
+import { writeResearchDigest, type DigestFinding } from "../digestWriter.js";
 
 export async function runTrendingJob(): Promise<void> {
   console.log("[job:trending] Fetching HF trending papers + HN stories...");
@@ -42,6 +44,16 @@ export async function runTrendingJob(): Promise<void> {
   const pushed = await writeTrendingFeed(matches.map((m) => ({ candidate: m.candidate, reason: m.reason })));
   console.log(`[job:trending] ${pushed.length} items written to the feed.`);
 
+  if (config.enableDigestWriter && pushed.length > 0) {
+    const findings: DigestFinding[] = pushed.map((p) => ({
+      candidate: p.candidate,
+      topic: "AI/ML Trending",
+      depth: "light", // Mapped directly for the Frontier / free_weekly lane
+    }));
+
+    await writeResearchDigest(findings);
+  }
+  
   const newState = markPushed(state, pushed.map((p) => p.candidate.url));
   await saveState({ ...newState, lastTrendingRunAt: new Date().toISOString() });
 
