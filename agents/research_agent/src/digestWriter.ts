@@ -21,6 +21,8 @@ export function buildDigestContent(dateStr: string, findings: DigestFinding[]): 
     "---",
     `id: digest-${dateStr}`,
     "type: digest",
+    `slug: digest-${dateStr}`,
+    `title: Research Digest (${dateStr})`,
     `date: ${dateStr}`,
     "---",
     "",

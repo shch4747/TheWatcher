@@ -27,7 +27,7 @@ function runTests() {
 
   // Test 2: Verify frontmatter and markdown structure
   const markdown = buildDigestContent("2026-09-25", [mockFinding]);
-  if (!markdown.includes("id: digest-2026-09-25") || !markdown.includes("type: digest")) {
+  if (!markdown.includes("id: digest-2026-09-25") || !markdown.includes("type: digest") || !markdown.includes("slug: digest-2026-09-25") || !markdown.includes("title: Research Digest (2026-09-25)")) {
     throw new Error("Test 2 Failed: Frontmatter missing required metadata keys");
   }
   if (!markdown.includes(expectedLine)) {
