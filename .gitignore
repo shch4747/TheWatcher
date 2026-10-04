@@ -220,3 +220,6 @@ __marimo__/
 # Watcher local runtime
 *.db
 watcher.db
+
+# Node
+node_modules/
