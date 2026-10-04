@@ -594,7 +594,7 @@ async def test_member_not_linked_says_so(vault: LocalDirClient):
     assert "isn't linked" in reply
 
 
-async def test_member_is_admin_only(vault: LocalDirClient):
+async def test_member_allowed_for_non_admin(vault: LocalDirClient):
     reply = await gateway.handle_command(
         PROJECT_GROUP,
         "919000000000@s.whatsapp.net",
@@ -603,7 +603,8 @@ async def test_member_is_admin_only(vault: LocalDirClient):
         mentions=["919800000004@s.whatsapp.net"],
     )
     assert reply is not None
-    assert "Only Bot Admins" in reply
+    assert "Only Bot Admins" not in reply
+    assert "isn't linked" in reply
 
 
 async def test_member_shows_about_and_open_tasks(vault: LocalDirClient):

@@ -228,8 +228,6 @@ async def member_report(
     cmd: MemberCommand, requested_by: str, vault: VaultClient, mentions: list[str] | None = None
 ) -> str:
     """`/member @person`: their About text and open tasks, read from the wiki."""
-    if not await is_bot_admin(requested_by):
-        return "Only Bot Admins can /member."
     wa_identity = mentioned_jid(cmd.mention, mentions or [])
     if wa_identity is None:
         return "Mention the person in this message: /member @name"
@@ -248,7 +246,7 @@ async def member_report(
 
     try:
         hits = await vault.search(f"owner:: [[{title}]]", limit=_MEMBER_TASK_LIMIT + 1)
-    except Exception as exc:  # noqa: BLE001 - the admin needs the failure, not a traceback
+    except Exception as exc:  # noqa: BLE001 - the person asking needs the failure, not a traceback
         return f"Couldn't search the wiki for {title}'s tasks: {exc}"
     tasks = [
         line for hit in hits[:_MEMBER_TASK_LIMIT] if (line := _open_task_line(hit.text)) is not None
