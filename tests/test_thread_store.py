@@ -6,10 +6,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from shared.wiki.interface import (
     LocalDirClient,
+    PageNotFound,
     ThreadChange,
     ThreadDraft,
     ThreadStore,
@@ -104,6 +106,54 @@ async def test_reindex_lists_threads_by_state_on_the_channel_page(vault):
     page = parse_page((await vault.read("channels/hall-team.md")).content)
     assert f"[[{a.path.removesuffix('.md')}|Booking the hall]]" in page.section("Active threads").body
     assert f"[[{b.path.removesuffix('.md')}|Ordering pizza]]" in page.section("Stale threads").body
+
+
+class MemoryVault:
+    """Minimal POSIX-path vault so ThreadStore tests work on Windows too."""
+
+    def __init__(self):
+        self.pages: dict[str, tuple[str, str]] = {}
+        self.revision = 0
+
+    def _write_result(self, path: str, content: str):
+        self.revision += 1
+        revision = str(self.revision)
+        self.pages[path] = (content, revision)
+        return SimpleNamespace(revision=revision)
+
+    async def list(self, prefix: str) -> list[str]:
+        return sorted(path for path in self.pages if path.startswith(prefix.rstrip("/") + "/"))
+
+    async def read(self, path: str):
+        if path not in self.pages:
+            raise PageNotFound(path)
+        content, revision = self.pages[path]
+        return SimpleNamespace(content=content, revision=revision)
+
+    async def create(self, path: str, content: str):
+        return self._write_result(path, content)
+
+    async def write(self, path: str, content: str, base_revision: str):
+        assert self.pages[path][1] == base_revision
+        return self._write_result(path, content)
+
+
+async def test_recent_order_uses_last_message_and_default_keeps_slug_order():
+    vault = MemoryVault()
+    store = ThreadStore(vault, Chan())
+    older_slug = await store.create(_draft("Older topic", at=T0))
+    newer_slug = await store.create(_draft("Newer topic", at=T0 + timedelta(days=2)))
+    await store.revise(
+        older_slug.slug,
+        _change(["m2"], T0 + timedelta(days=1)),
+    )
+
+    reloaded = ThreadStore(vault, Chan())
+    assert [thread.slug for thread in await reloaded.threads()] == [older_slug.slug, newer_slug.slug]
+    assert [thread.slug for thread in await reloaded.threads(order="recent")] == [
+        newer_slug.slug,
+        older_slug.slug,
+    ]
 
 
 async def test_retitling_a_channel_moves_its_threads_instead_of_orphaning_them(vault):

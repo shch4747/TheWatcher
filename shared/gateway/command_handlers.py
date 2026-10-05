@@ -37,7 +37,7 @@ from shared.gateway.onboarding import (
 )
 from shared.gateway.runtime import GatewayRuntime
 from shared.gateway.types import GroupParticipant
-from shared.scheduler.interface import due_jobs, ledger_tail, registered_jobs, run_job
+from shared.scheduler.interface import due_jobs, ledger_tail, registered_jobs
 from shared.wiki.interface import LapisClient, VaultClient, check_vault_connection, default_vault_client
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -49,7 +49,7 @@ _HELP = "\n".join(
         "/channels — list watched channels",
         "/unwatch [jid] — stop watching this group, or another by jid",
         "/status — this channel's kind, initiative, and cursor",
-        "/ingest — process unprocessed messages now, ignoring batch limits",
+        "/ingest — process this channel's unprocessed messages now",
         "/health — connectivity and the last outcome of each job",
         "/setup-members — match this group's members to the ARIES roster",
         "/link @member [[Member Title]] — link the mentioned person to a member",
@@ -85,16 +85,10 @@ async def channels_report(requested_by: str, runtime: GatewayRuntime) -> str:
     return "\n".join(lines)
 
 
-async def trigger_ingest(requested_by: str) -> str:
+async def trigger_ingest(requested_by: str, channel_jid: str, runtime: GatewayRuntime) -> str:
     if not await is_bot_admin(requested_by):
         return "Only Bot Admins can /ingest."
-    try:
-        result = await run_job("ingest_now")
-    except KeyError:
-        return "ingest_now isn't registered - is the app running via main.py (not just uvicorn)?"
-    if result.outcome == "success":
-        return "Ingestion triggered ✅ (ignored batch thresholds - cut whatever was unprocessed)"
-    return f"Ingestion failed: {result.error}"
+    return await runtime.ingest_channel(channel_jid)
 
 
 async def toggle_agent(requested_by: str) -> str:
@@ -294,7 +288,7 @@ async def handle_command(
     if isinstance(cmd, ChannelsCommand):
         return await channels_report(sender, runtime)
     if isinstance(cmd, IngestCommand):
-        return await trigger_ingest(sender)
+        return await trigger_ingest(sender, channel_jid, runtime)
     if isinstance(cmd, ToggleAgentCommand):
         return await toggle_agent(sender)
     if isinstance(cmd, HelpCommand):

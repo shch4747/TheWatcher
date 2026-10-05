@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 MessageHook = Callable[[InboundMessage], Awaitable[None]]
 ReactionHook = Callable[[str, str | None, str | None], Awaitable[object]]
 HealthLine = Callable[[], Awaitable[str]]
+ChannelIngestHook = Callable[[str], Awaitable[str]]
 # Fired once a channel has been set up and its history imported, with the
 # channel as registered. The composition root uses it to start an ingest.
 ChannelWatchedHook = Callable[[ChannelInfo], Awaitable[None]]
@@ -43,6 +44,7 @@ class HookRegistry:
         self.reaction_hooks: list[ReactionHook] = []
         self.channel_watched_hooks: list[ChannelWatchedHook] = []
         self.health_lines: list[HealthLine] = []
+        self.channel_ingest_hooks: list[ChannelIngestHook] = []
 
     def register_message_hook(self, hook: MessageHook) -> None:
         self.message_hooks.append(hook)
@@ -56,11 +58,15 @@ class HookRegistry:
     def register_health_line(self, line: HealthLine) -> None:
         self.health_lines.append(line)
 
+    def register_channel_ingest_hook(self, hook: ChannelIngestHook) -> None:
+        self.channel_ingest_hooks.append(hook)
+
     def clear(self) -> None:
         self.message_hooks.clear()
         self.reaction_hooks.clear()
         self.channel_watched_hooks.clear()
         self.health_lines.clear()
+        self.channel_ingest_hooks.clear()
 
 
 class GatewayRuntime:
@@ -84,6 +90,11 @@ class GatewayRuntime:
     async def react(self, message_id: str, channel: str, emoji: str) -> None:
         """Bot-sent reaction. Not logged to outbound_log since it isn't a text send."""
         await self.client.react(message_id, channel, emoji)
+
+    async def ingest_channel(self, channel: str) -> str:
+        if not self.hooks.channel_ingest_hooks:
+            return "On-demand ingestion isn't registered - is the app running via main.py?"
+        return await self.hooks.channel_ingest_hooks[-1](channel)
 
     async def check_gowa_connection(self) -> dict:
         return await self.client.session_status()

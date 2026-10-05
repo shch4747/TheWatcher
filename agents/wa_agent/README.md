@@ -33,9 +33,12 @@ ADR-0003).
   stay off until a Bot Admin sends `/toggle-agent`. Context
   is the last 5 messages plus any message those five reply to.
   Read-only wiki tools (list this channel's threads, search, read a
-  page) when that isn't enough. Media-only mentions and replies get a
-  canned "can't see that" reply.
-- `wiki_tools.py` — the Chat Agent's read-only Lapis tools (no writes).
+  page) when that isn't enough. Bot Admins also get an on-demand ingest
+  tool for any watched channel; it uses the normal ingestion pipeline and
+  shared scheduler lock. Media-only mentions and replies get a canned
+  "can't see that" reply.
+- `wiki_tools.py` — the Chat Agent's wiki lookup tools and admin-only
+  channel-ingest tool. Thread listings are ordered by most recent message.
 - `lifecycle.py` — daily stale/archive pass and the Sunday nudge.
 - `proposals.py` — proposal lifecycle; persistence is `ProposalStore` on
   the Gateway interface, executors are one function per kind.

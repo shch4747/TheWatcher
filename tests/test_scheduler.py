@@ -37,6 +37,34 @@ async def test_two_overlapping_triggers_same_key_run_serially():
     assert max_concurrent == 1
 
 
+async def test_try_run_exclusive_reports_busy_for_a_scheduled_ingest_lock():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[str] = []
+
+    async def scheduled() -> None:
+        entered.set()
+        await release.wait()
+
+    async def ad_hoc() -> str:
+        calls.append("ad-hoc")
+        return "done"
+
+    scheduler.register("ingest_tick", scheduled, RunNow(), lock_key="ingest_tick")
+    running = asyncio.create_task(scheduler.run_job("ingest_tick"))
+    await entered.wait()
+
+    acquired, result = await scheduler.try_run_exclusive("ingest_tick", ad_hoc)
+    assert (acquired, result) == (False, None)
+    assert calls == []
+
+    release.set()
+    await running
+    acquired, result = await scheduler.try_run_exclusive("ingest_tick", ad_hoc)
+    assert (acquired, result) == (True, "done")
+    assert calls == ["ad-hoc"]
+
+
 async def test_failing_job_retries_and_ledger_shows_it():
     attempts = 0
 

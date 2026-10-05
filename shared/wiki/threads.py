@@ -167,12 +167,29 @@ class ThreadStore:
             self._archived = await self._load(archive_dir(self.channel), archived=True)
         return self._archived
 
-    async def threads(self, states: Iterable[str] = OPEN_STATES) -> list[StoredThread]:
+    async def threads(
+        self,
+        states: Iterable[str] = OPEN_STATES,
+        order: str = "slug",
+    ) -> list[StoredThread]:
         """Unarchived Threads in the given states, oldest id first. The
         default - active and stale - is what new messages may land in (a
-        stale Thread is revivable)."""
+        stale Thread is revivable). ``recent`` orders by last message, newest
+        first; undated Threads come last and slug breaks ties."""
         wanted = set(states)
-        return sorted((t for t in (await self._live()).values() if t.state in wanted), key=lambda t: t.slug)
+        threads = (t for t in (await self._live()).values() if t.state in wanted)
+        if order == "slug":
+            return sorted(threads, key=lambda t: t.slug)
+        if order == "recent":
+            return sorted(
+                threads,
+                key=lambda t: (
+                    t.last_message_at is None,
+                    -(t.last_message_at.timestamp()) if t.last_message_at is not None else 0,
+                    t.slug,
+                ),
+            )
+        raise ValueError(f"unsupported thread order: {order}")
 
     async def get(self, slug: str) -> StoredThread | None:
         """A Thread by id, wherever it is - including ended and archived."""

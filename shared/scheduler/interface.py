@@ -10,11 +10,15 @@ their own `Scheduler`.
 """
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
+from typing import TypeVar
 
 from shared.db import Run
 from shared.scheduler.scheduler import FailureHook, JobSpec, RunResult, Scheduler
 from shared.scheduler.triggers import RunAfter, RunAt, RunEvery, RunNow, Trigger, is_due
+
+ResultT = TypeVar("ResultT")
 
 __all__ = [
     "Scheduler",
@@ -25,6 +29,7 @@ __all__ = [
     "unregister_all",
     "due_jobs",
     "run_job",
+    "try_run_exclusive",
     "request_run",
     "registered_jobs",
     "job_spec",
@@ -87,6 +92,12 @@ async def due_jobs(now: datetime | None = None) -> list[str]:
 
 async def run_job(name: str) -> RunResult:
     return await _default.run_job(name)
+
+
+async def try_run_exclusive(
+    lock_key: str, handler: Callable[[], Awaitable[ResultT]]
+) -> tuple[bool, ResultT | None]:
+    return await _default.try_run_exclusive(lock_key, handler)
 
 
 async def run_after_event(event: str) -> list[RunResult]:

@@ -100,12 +100,12 @@ process start, so `docker compose up -d` after editing it is enough.
   `/unwatch <jid>` - stop watching a *different* channel by jid (from
   `/channels`), without needing to be a member of it.
 - `/status` - kind/initiative/cursor for the channel this is sent from.
-- `/ingest` - cut and process whatever's unprocessed right now, for
-  every watched channel, **ignoring** BATCH_N/BATCH_T_MINUTES/
-  BATCH_QUIET_MINUTES (runs as `ingest_now`, sharing `ingest_tick`'s
-  lock so the two can't overlap) - unlike the scheduled `ingest_tick`
-  tick, which always respects those thresholds and can legitimately do
-  nothing if a batch isn't ready yet.
+- `/ingest` - for Bot Admins, immediately drain unprocessed messages in
+  the channel where the command is sent, ignoring scheduled batch
+  readiness thresholds. It uses the same `ingest_tick` lock as scheduled
+  ingestion and backfill; if any ingestion already holds that lock, it
+  reports that ingestion is running. The normal batch size and the
+  pipeline's drain safety limit still apply.
 - `/health` - gowa/vault/model connectivity, admin/channel/proposal
   counts, and the outcome of each scheduled job's last run
   (`ingest_tick`, `lifecycle_tick`, `project_agent_tick`) - check this
@@ -256,8 +256,8 @@ so a health-check loop can call them unconditionally.
 ## Recurring jobs
 
 `main.py` (what the Dockerfile actually runs, not raw `uvicorn`) wires
-seven Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
-min), `ingest_now` (`/ingest` only), `backfill_ingest` (the first full
+six Scheduler jobs on startup: `ingest_tick` (batch cutting, every 2
+min), `backfill_ingest` (the first full
 ingest of a channel `/setup` just imported history for), `project_agent_tick` (works through
 `inbox/project_agent.md`, every 2 min - or on the next 30 s poll when a
 triggering Inbox Item is posted, ADR-0014), `lifecycle_tick`
@@ -265,7 +265,10 @@ triggering Inbox Item is posted, ADR-0014), `lifecycle_tick`
 Sundays) and `expire_proposals_tick` (hourly). It also registers the
 Chat Agent as a real-time message hook and Proposal confirmation as a
 reaction hook, so mentions/replies and 👍s are handled immediately
-rather than waiting for the next batch. `/health` lists the last run of
+rather than waiting for the next batch. Bot Admins can also ask the Chat
+Agent to ingest a watched channel on demand; the tool runs the same
+pipeline under the shared ingestion lock and accepts a channel JID,
+channel title, or initiative name. `/health` lists the last run of
 every registered job.
 
 An agent's Inbox is a wiki page you can read (and add to: a line typed
