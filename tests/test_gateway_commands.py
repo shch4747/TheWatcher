@@ -24,6 +24,7 @@ from shared.gateway.commands import (
     HelpCommand,
     IngestCommand,
     LinkCommand,
+    MemberCommand,
     SetupCommand,
     SetupMembersCommand,
     StatusCommand,
@@ -313,8 +314,9 @@ async def test_help_lists_commands_and_agent_state(vault: LocalDirClient):
     from shared.gateway.agent_switch import set_chat_agent_enabled
 
     await set_chat_agent_enabled(False)
-    reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/help", vault)
+    reply = await gateway.handle_command(PROJECT_GROUP, "919000000000@s.whatsapp.net", "/help", vault)
     assert reply is not None
+    assert "Only Bot Admins" not in reply
     listed = (
         "/setup",
         "/channels",
@@ -323,6 +325,7 @@ async def test_help_lists_commands_and_agent_state(vault: LocalDirClient):
         "/ingest",
         "/health",
         "/link",
+        "/member",
         "/setup-members",
         "/toggle-agent",
     )
@@ -570,3 +573,61 @@ async def test_retitling_a_channel_moves_its_threads(vault: LocalDirClient):
     assert [t.slug for t in await ThreadStore(vault, channel).threads()] == ["20260901-hall"]
     assert parse_page((await vault.read("channels/new-name.md")).content).frontmatter.title == "New Name"
     assert await vault.list("channels/old-name") == []
+
+
+def test_parse_member_command():
+    assert parse_command("/member @919876543210") == MemberCommand(mention="919876543210")
+    assert parse_command("/member") is None
+    assert parse_command("/members @919876543210") is None
+
+
+async def test_member_without_a_mention_asks_for_one(vault: LocalDirClient):
+    reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/member @919800000001", vault, mentions=[])
+    assert reply is not None
+    assert "mention" in reply.lower()
+
+
+async def test_member_not_linked_says_so(vault: LocalDirClient):
+    reply = await gateway.handle_command(
+        PROJECT_GROUP, ADMIN, "/member @919800000002", vault, mentions=["919800000002@s.whatsapp.net"]
+    )
+    assert reply is not None
+    assert "isn't linked" in reply
+
+
+async def test_member_allowed_for_non_admin(vault: LocalDirClient):
+    reply = await gateway.handle_command(
+        PROJECT_GROUP,
+        "919000000000@s.whatsapp.net",
+        "/member @919800000004",
+        vault,
+        mentions=["919800000004@s.whatsapp.net"],
+    )
+    assert reply is not None
+    assert "Only Bot Admins" not in reply
+    assert "isn't linked" in reply
+
+
+async def test_member_shows_about_and_open_tasks(vault: LocalDirClient):
+    jid = "919800000003@s.whatsapp.net"
+    cmd = LinkCommand(mention="919800000003", member_ref="[[Testmember]]")
+    await gateway.link(cmd, ADMIN, mentions=[jid])
+    await vault.create(
+        "people/testmember.md",
+        "---\ntype: member\nslug: testmember\ntitle: Testmember\n---\n# Testmember\n"
+        "## About\nLikes building bots.\n## Notes\n",
+    )
+    await vault.create(
+        "channels/demo/20260901-hall.md",
+        "---\ntype: thread\nslug: 20260901-hall\ntitle: Hall\n---\n# Hall\n## Items\n"
+        "- [ ] Book the hall [owner:: [[Testmember]]] [due:: 2026-09-24] ^i-0001\n"
+        "- [x] Finished thing [owner:: [[Testmember]]] ^i-0002\n",
+    )
+
+    reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/member @919800000003", vault, mentions=[jid])
+
+    assert reply is not None
+    assert "Likes building bots." in reply
+    assert "Book the hall" in reply
+    assert "due 2026-09-24" in reply
+    assert "Finished thing" not in reply

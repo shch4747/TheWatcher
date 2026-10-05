@@ -99,17 +99,12 @@ process start, so `docker compose up -d` after editing it is enough.
 - `/unwatch` - stop watching the channel this is sent from.
   `/unwatch <jid>` - stop watching a *different* channel by jid (from
   `/channels`), without needing to be a member of it.
-- `/status` - kind/initiative/cursor for the channel this is sent from.
 - `/ingest` - cut and process whatever's unprocessed right now, for
   every watched channel, **ignoring** BATCH_N/BATCH_T_MINUTES/
   BATCH_QUIET_MINUTES (runs as `ingest_now`, sharing `ingest_tick`'s
   lock so the two can't overlap) - unlike the scheduled `ingest_tick`
   tick, which always respects those thresholds and can legitimately do
   nothing if a batch isn't ready yet.
-- `/health` - gowa/vault/model connectivity, admin/channel/proposal
-  counts, and the outcome of each scheduled job's last run
-  (`ingest_tick`, `lifecycle_tick`, `project_agent_tick`) - check this
-  proactively any time, from your phone.
 - `/setup-members` - list this group's WhatsApp members, fuzzy-match
   each display name against the ARIES member roster, and link the
   confident ones. Everyone else is printed (with the roster's titles)
@@ -120,7 +115,17 @@ process start, so `docker compose up -d` after editing it is enough.
 - `/toggle-agent` - switch chat replies on or off. Off until the first
   toggle, including after a fresh database. Ingest and the other
   commands keep working either way.
-- `/help` - list the commands above and whether the chat agent is on.
+
+## Commands for everyone
+
+- `/status` - kind/initiative/cursor for the channel this is sent from.
+- `/member @person` - what this person is working on, from the wiki
+  (their About text and open tasks).
+- `/health` - gowa/vault/model connectivity, admin/channel/proposal
+  counts, and the outcome of each scheduled job's last run
+  (`ingest_tick`, `lifecycle_tick`, `project_agent_tick`) - check this
+  proactively any time, from your phone.
+- `/help` - list the commands and whether the chat agent is on.
 
 ## Finding out about a failed scheduled job
 

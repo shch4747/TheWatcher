@@ -21,6 +21,7 @@ from shared.gateway.commands import (
     HelpCommand,
     IngestCommand,
     LinkCommand,
+    MemberCommand,
     SetupCommand,
     SetupMembersCommand,
     StatusCommand,
@@ -38,7 +39,16 @@ from shared.gateway.onboarding import (
 from shared.gateway.runtime import GatewayRuntime
 from shared.gateway.types import GroupParticipant
 from shared.scheduler.interface import due_jobs, ledger_tail, registered_jobs, run_job
-from shared.wiki.interface import LapisClient, VaultClient, check_vault_connection, default_vault_client
+from shared.wiki.interface import (
+    LapisClient,
+    PageNotFound,
+    VaultClient,
+    check_vault_connection,
+    default_vault_client,
+    member_page_path,
+    parse_item_line,
+    parse_page_lenient,
+)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -53,6 +63,7 @@ _HELP = "\n".join(
         "/health — connectivity and the last outcome of each job",
         "/setup-members — match this group's members to the ARIES roster",
         "/link @member [[Member Title]] — link the mentioned person to a member",
+        "/member @person — what this person is working on, from the wiki",
         "/toggle-agent — turn chat replies on or off",
     ]
 )
@@ -104,9 +115,7 @@ async def toggle_agent(requested_by: str) -> str:
     return "Chat agent is on." if enabled else "Chat agent is off."
 
 
-async def help_text(requested_by: str) -> str:
-    if not await is_bot_admin(requested_by):
-        return "Only Bot Admins can /help."
+async def help_text() -> str:
     state = "on" if await chat_agent_enabled() else "off"
     return f"{_HELP}\n\nChat agent is {state}."
 
@@ -185,6 +194,67 @@ async def link(cmd: LinkCommand, requested_by: str, mentions: list[str] | None =
         member_title = member.title
     await link_member(wa_identity, member_title, cms_id, linked_by=requested_by)
     return f"Linked @{cmd.mention} to [[{member_title}]]."
+
+
+_MEMBER_TASK_LIMIT = 10
+_MEMBER_ABOUT_CHARS = 600
+
+
+def _about_text(content: str) -> str | None:
+    """The About section of a member page, or None if it can't be read."""
+    try:
+        page, _error = parse_page_lenient(content)
+    except Exception:  # noqa: BLE001 - a hand-edited page must not break the command
+        return None
+    section = page.section("About")
+    body = section.body.strip() if section is not None else ""
+    return body[:_MEMBER_ABOUT_CHARS] or None
+
+
+def _open_task_line(text: str) -> str | None:
+    """One search hit as a reply line; None for a finished task."""
+    item = parse_item_line(text)
+    if item is None:
+        return f"- {text}"
+    if item.checked:
+        return None
+    due = item.fields.get("due")
+    return f"- {item.text}" + (f" (due {due})" if due else "")
+
+
+async def member_report(
+    cmd: MemberCommand, requested_by: str, vault: VaultClient, mentions: list[str] | None = None
+) -> str:
+    """`/member @person`: their About text and open tasks, read from the wiki."""
+    wa_identity = mentioned_jid(cmd.mention, mentions or [])
+    if wa_identity is None:
+        return "Mention the person in this message: /member @name"
+    member = await resolve_sender(wa_identity)
+    if member is None:
+        return "That person isn't linked to a member yet. An admin can /link them first."
+    title = member.member_title
+
+    about: str | None
+    try:
+        page = await vault.read(member_page_path(title))
+    except PageNotFound:
+        about = None
+    else:
+        about = _about_text(page.content)
+
+    try:
+        hits = await vault.search(f"owner:: [[{title}]]", limit=_MEMBER_TASK_LIMIT + 1)
+    except Exception as exc:  # noqa: BLE001 - the person asking needs the failure, not a traceback
+        return f"Couldn't search the wiki for {title}'s tasks: {exc}"
+    tasks = [
+        line for hit in hits[:_MEMBER_TASK_LIMIT] if (line := _open_task_line(hit.text)) is not None
+    ]
+
+    lines = [f"*{title}*", about or "(no About text on their wiki page yet)", "", "*Open tasks*"]
+    lines += tasks or ["(none found)"]
+    if len(hits) > _MEMBER_TASK_LIMIT:
+        lines.append("...there may be more, only the first matches are shown")
+    return "\n".join(lines)
 
 
 def _participant_label(person: GroupParticipant) -> str:
@@ -289,6 +359,8 @@ async def handle_command(
         return await status(channel_jid)
     if isinstance(cmd, LinkCommand):
         return await link(cmd, sender, mentions)
+    if isinstance(cmd, MemberCommand):
+        return await member_report(cmd, sender, vault, mentions)
     if isinstance(cmd, HealthCommand):
         return await health(runtime)
     if isinstance(cmd, ChannelsCommand):
@@ -298,5 +370,5 @@ async def handle_command(
     if isinstance(cmd, ToggleAgentCommand):
         return await toggle_agent(sender)
     if isinstance(cmd, HelpCommand):
-        return await help_text(sender)
+        return await help_text()
     raise AssertionError(f"unhandled command type: {cmd!r}")
