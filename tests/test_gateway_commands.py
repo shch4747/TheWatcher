@@ -314,8 +314,9 @@ async def test_help_lists_commands_and_agent_state(vault: LocalDirClient):
     from shared.gateway.agent_switch import set_chat_agent_enabled
 
     await set_chat_agent_enabled(False)
-    reply = await gateway.handle_command(PROJECT_GROUP, ADMIN, "/help", vault)
+    reply = await gateway.handle_command(PROJECT_GROUP, "919000000000@s.whatsapp.net", "/help", vault)
     assert reply is not None
+    assert "Only Bot Admins" not in reply
     listed = (
         "/setup",
         "/channels",

@@ -115,9 +115,7 @@ async def toggle_agent(requested_by: str) -> str:
     return "Chat agent is on." if enabled else "Chat agent is off."
 
 
-async def help_text(requested_by: str) -> str:
-    if not await is_bot_admin(requested_by):
-        return "Only Bot Admins can /help."
+async def help_text() -> str:
     state = "on" if await chat_agent_enabled() else "off"
     return f"{_HELP}\n\nChat agent is {state}."
 
@@ -372,5 +370,5 @@ async def handle_command(
     if isinstance(cmd, ToggleAgentCommand):
         return await toggle_agent(sender)
     if isinstance(cmd, HelpCommand):
-        return await help_text(sender)
+        return await help_text()
     raise AssertionError(f"unhandled command type: {cmd!r}")
