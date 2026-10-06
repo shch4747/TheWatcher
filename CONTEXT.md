@@ -13,7 +13,7 @@ The model-driven module that ingests Batches from Channels, maintains Threads an
 _Avoid_: WA agent, ingestion pipeline (that is one part of it)
 
 **Chat Agent**:
-The part of the WhatsApp Agent that acts when a member addresses the bot in a Channel. A message addresses the bot iff it @mentions the bot or replies to a bot message — deterministic, no model. It first brings the relevant Thread up to date, then hands over to the Project Agent (which owns Projects and Events) in a project/event Channel, or answers read-only from the wiki elsewhere. It never writes to the wiki without a confirmed Proposal. Taking real-world actions (scheduling, poking people, GitHub) is a later goal.
+The part of the WhatsApp Agent that acts when a member addresses the bot in a Channel. A message addresses the bot iff it @mentions the bot or replies to a bot message — deterministic, no model. It can look up wiki threads, search and read pages. Bot Admins can also ask it to ingest pending messages for a watched Channel using the normal ingestion pipeline. Direct wiki changes requested in chat still require a confirmed Proposal. Taking real-world actions (scheduling, poking people, GitHub) is a later goal.
 
 **Scheduler**:
 The module every agent uses to run things later, on a cadence, in order, or exclusively: triggers, a run ledger, dependency rules, per-key locks, retries, and "run now". Independent of WhatsApp.
@@ -43,7 +43,7 @@ What a Channel is: `coordis` | `exes` | `research` | `all` | `project` | `event`
 The set of Channels the WhatsApp Agent ingests from and the Chat Agent responds in. Groups not on it are ignored. DMs are never on it.
 
 **Bot Admin**:
-A member allowed to issue bot commands (`/setup`, `/unwatch`, `/status`, `/link`).
+A member allowed to issue bot commands (`/setup`, `/unwatch`, `/status`, `/link`, `/ingest`) and use the Chat Agent's on-demand ingestion tool.
 
 **Thread**:
 A topic-coherent sequence of messages within one Channel. States: `active`; `stale` (no messages for 3 days, configurable — revivable); `ended` (concluded — decided only by humans, never by a model; a continuation is a new Thread linking to it). Threads never span Channels. A message usually belongs to one Thread but may belong to several.

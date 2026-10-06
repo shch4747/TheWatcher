@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypeVar
 
 from sqlalchemy import select
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 Handler = Callable[[], Awaitable[None]]
 FailureHook = Callable[[str, str], Awaitable[None]]
+ResultT = TypeVar("ResultT")
 
 
 @dataclass
@@ -118,6 +120,24 @@ class Scheduler:
             async with lock:
                 return await self._run_with_retries(spec)
         return await self._run_with_retries(spec)
+
+    async def try_run_exclusive(
+        self, lock_key: str, handler: Callable[[], Awaitable[ResultT]]
+    ) -> tuple[bool, ResultT | None]:
+        """Run an ad-hoc operation under a registered job's lock key.
+
+        Return ``(False, None)`` immediately when that key is busy. This lets
+        request-driven work share scheduler mutual exclusion without queuing
+        behind a scheduled ingestion tick.
+        """
+        lock = self._lock_for(lock_key)
+        if lock.locked():
+            return False, None
+        await lock.acquire()
+        try:
+            return True, await handler()
+        finally:
+            lock.release()
 
     async def _run_with_retries(self, spec: JobSpec) -> RunResult:
         async with get_session() as session:

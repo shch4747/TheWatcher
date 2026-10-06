@@ -1,6 +1,6 @@
 """Chat Agent: @mention the bot -> last 5 messages plus their quoted
-replies as context -> a text answer to that one message, with read-only
-wiki tools if that isn't enough.
+replies as context -> a text answer to that one message, with wiki lookup
+tools and an admin-only on-demand ingestion tool if needed.
 
 No write-proposals. An @mention or a reply to one of the bot's own
 messages triggers an answer. A mention or reply that is only media
@@ -10,6 +10,7 @@ a model call.
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 
 from shared.config import settings
 from shared.gateway.interface import (
@@ -18,6 +19,7 @@ from shared.gateway.interface import (
     chat_agent_enabled,
     get_channel,
     get_message,
+    is_bot_admin,
     is_bot_outbound,
     recent_messages,
 )
@@ -28,7 +30,7 @@ from shared.models.interface import DecisionModelProtocol, TextModelClient, gene
 from shared.observability.interface import CHAT, scope
 from shared.wiki.interface import VaultClient
 
-from agents.wa_agent.wiki_tools import read_only_wiki_tools
+from agents.wa_agent.wiki_tools import channel_ingest_tool, read_only_wiki_tools
 
 CONTEXT_LIMIT = 5
 CANNOT_SEE_MEDIA = "I can't see stickers or images. Send a text message."
@@ -40,9 +42,13 @@ _SYSTEM = (
     "If that message's context is incomplete, look the answer up in the wiki: "
     "start by listing this channel's threads, then search or read the "
     "relevant pages. Do not search when the chat already answers it. "
+    "For Bot Admins only, if the question depends on recent chat that has "
+    "not reached the wiki, you may use ingest_channel for the current or "
+    "another watched channel, then read the updated threads. "
     "If the question is obviously poking fun or trying to waste tokens, "
     "skip the lookup and reply with one short edgy line that makes fun "
-    "of the request. Never write to the wiki."
+    "of the request. Never directly author wiki content; only use the "
+    "on-demand ingestion tool when its conditions and Bot Admin access allow it."
 )
 
 _MENTION_RE = re.compile(rf"@{re.escape(settings.bot_mention_name)}\b", re.IGNORECASE)
@@ -162,9 +168,15 @@ async def _context_for(message: InboundMessage) -> list[InboundMessage]:
 
 
 class ChatAgent:
-    def __init__(self, worker_client: TextModelClient, vault: VaultClient) -> None:
+    def __init__(
+        self,
+        worker_client: TextModelClient,
+        vault: VaultClient,
+        ingest_channel: Callable[[str], Awaitable[str]] | None = None,
+    ) -> None:
         self.worker_client = worker_client
         self.vault = vault
+        self.ingest_channel = ingest_channel
 
     async def handle(self, message: InboundMessage) -> str | None:
         if not await chat_agent_enabled():
@@ -187,12 +199,15 @@ class ChatAgent:
         context = await _context_for(message)
         prompt = _answer_prompt(context, message)
         channel = await get_channel(message.channel)
+        tools = list(read_only_wiki_tools(self.vault, channel))
+        if self.ingest_channel is not None and await is_bot_admin(message.sender):
+            tools.append(channel_ingest_tool(message.sender, message.channel, self.ingest_channel))
         with scope(phase=CHAT):
             result = await generate_with_tools(
                 self.worker_client,
                 "worker",
                 prompt,
-                tools=list(read_only_wiki_tools(self.vault, channel)),
+                tools=tools,
                 deps=None,
                 system=_SYSTEM,
             )
@@ -207,6 +222,9 @@ async def interpret_text_approval(reply_text: str, decision_client: DecisionMode
 
 
 async def handle_chat_message(
-    message: InboundMessage, worker_client: TextModelClient, vault: VaultClient
+    message: InboundMessage,
+    worker_client: TextModelClient,
+    vault: VaultClient,
+    ingest_channel: Callable[[str], Awaitable[str]] | None = None,
 ) -> str | None:
-    return await ChatAgent(worker_client, vault).handle(message)
+    return await ChatAgent(worker_client, vault, ingest_channel).handle(message)

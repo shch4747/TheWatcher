@@ -31,8 +31,11 @@ from shared.gateway.app import app as fastapi_app
 from shared.gateway.interface import (
     ChannelInfo,
     InboundMessage,
+    get_channel,
     list_channels,
     notify_logs,
+    pending_messages,
+    register_channel_ingest_hook,
     register_channel_watched_hook,
     register_health_line,
     register_message_hook,
@@ -46,7 +49,15 @@ from shared.models.interface import (
     worker_model,
 )
 from shared.observability.interface import ingest_run, setup_tracing
-from shared.scheduler.interface import RunAfter, RunEvery, due_jobs, register, request_run, run_job
+from shared.scheduler.interface import (
+    RunAfter,
+    RunEvery,
+    due_jobs,
+    register,
+    request_run,
+    run_job,
+    try_run_exclusive,
+)
 from shared.wiki.interface import default_vault_client
 
 logger = logging.getLogger(__name__)
@@ -89,6 +100,7 @@ class WatcherApplication:
 
     def setup(self) -> None:
         register_message_hook(self._chat_hook)
+        register_channel_ingest_hook(self._ingest_channel_on_demand)
         register_reaction_hook(handle_reaction)
         register_channel_watched_hook(self._channel_watched_hook)
         register_health_line(pending_proposals_line)
@@ -96,14 +108,6 @@ class WatcherApplication:
             "ingest_tick",
             self._ingest_tick,
             RunEvery(timedelta(minutes=2)),
-            lock_key="ingest_tick",
-            max_retries=1,
-            on_failure=self._notify_job_failure,
-        )
-        register(
-            "ingest_now",
-            self._ingest_now,
-            RunAfter("manual-ingest"),
             lock_key="ingest_tick",
             max_retries=1,
             on_failure=self._notify_job_failure,
@@ -151,7 +155,52 @@ class WatcherApplication:
         register_consumer("project_agent", lambda: request_run("project_agent_tick"))
 
     async def _chat_hook(self, message: InboundMessage) -> None:
-        await handle_chat_message(message, wa_worker_model(), default_vault_client())
+        await handle_chat_message(
+            message,
+            wa_worker_model(),
+            default_vault_client(),
+            self._ingest_channel_on_demand,
+        )
+
+    async def _ingest_channel_on_demand(self, channel_jid: str) -> str:
+        async def ingest() -> str:
+            channel = await get_channel(channel_jid)
+            if channel is None:
+                return "That channel isn't being watched."
+            if channel.kind == "logs":
+                return "The logs channel is excluded from ingestion."
+            if not await pending_messages(channel_jid):
+                return "There are no unprocessed messages in that channel."
+
+            vault = default_vault_client()
+            worker = wa_worker_model()
+            assign_client = assignment_model()
+            decider = openrouter_jev_client() if settings.assignment_mode == "jev" else None
+            pipeline = IngestionPipeline(vault, worker, assign_client, decider)
+            async with ingest_run(forced=True) as run:
+                async with run.channel(channel):
+                    result = await pipeline.run_drained(channel_jid)
+                    run.record(result)
+            report = run.report()
+            if report:
+                await notify_logs(report)
+            if result is None:
+                return "There are no unprocessed messages in that channel."
+            return (
+                f"Ingested {result.message_count} messages in {channel.title or channel.jid}. "
+                f"Updated {len(result.threads_updated)} threads and created "
+                f"{len(result.threads_created)}."
+            )
+
+        try:
+            acquired, result = await try_run_exclusive("ingest_tick", ingest)
+        except Exception as exc:  # noqa: BLE001 - return a useful command/tool result
+            logger.exception("on-demand ingest failed for %s", channel_jid)
+            return f"Ingestion failed: {type(exc).__name__}: {exc}"
+        if not acquired:
+            return "Ingestion is already running. Try again when it finishes."
+        assert result is not None
+        return result
 
     async def _channel_watched_hook(self, channel: ChannelInfo) -> None:
         self.watched.add(channel.jid)
@@ -159,9 +208,6 @@ class WatcherApplication:
 
     async def _ingest_tick(self, force: bool = False) -> None:
         await self._ingest(await list_channels(), force=force)
-
-    async def _ingest_now(self) -> None:
-        await self._ingest_tick(force=True)
 
     async def _backfill_ingest(self) -> None:
         """First ingest of channels `/setup` just seeded with history:

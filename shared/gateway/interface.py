@@ -36,11 +36,12 @@ from shared.gateway.command_handlers import (
 from shared.gateway.command_handlers import (
     link,
     status,
-    trigger_ingest,
+    trigger_ingest as _trigger_ingest,
 )
 from shared.gateway.onboarding import SETUP_STEPS, continue_setup_session, setup, unwatch
 from shared.gateway.proposals import ProposalRecord, ProposalStore
 from shared.gateway.runtime import (
+    ChannelIngestHook,
     ChannelWatchedHook,
     GatewayRuntime,
     HealthLine,
@@ -71,6 +72,11 @@ def register_reaction_hook(hook: ReactionHook) -> None:
 def register_channel_watched_hook(hook: ChannelWatchedHook) -> None:
     """Called after `/setup` has watched a channel and read its history."""
     runtime.hooks.register_channel_watched_hook(hook)
+
+
+def register_channel_ingest_hook(hook: ChannelIngestHook) -> None:
+    """Register the composition-root handler for an on-demand channel ingest."""
+    runtime.hooks.register_channel_ingest_hook(hook)
 
 
 def register_health_line(line: HealthLine) -> None:
@@ -116,6 +122,14 @@ async def channels_report(requested_by: str) -> str:
     return await _channels_report(requested_by, runtime)
 
 
+async def trigger_ingest(requested_by: str, channel_jid: str | None = None) -> str:
+    if not await is_bot_admin(requested_by):
+        return "Only Bot Admins can /ingest."
+    if channel_jid is None:
+        return "Run /ingest in the channel you want to process."
+    return await _trigger_ingest(requested_by, channel_jid, runtime)
+
+
 async def notify_logs(text: str) -> bool:
     """Post `text` to the logs channel if one is set up."""
     logs = await get_channel_by_kind("logs")
@@ -146,6 +160,7 @@ __all__ = [
     "register_message_hook",
     "register_reaction_hook",
     "register_channel_watched_hook",
+    "register_channel_ingest_hook",
     "ChannelWatchedHook",
     "register_health_line",
     "clear_hooks",

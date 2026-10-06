@@ -20,15 +20,13 @@ def _utcnow() -> datetime:
 
 
 class IngestRun(Base):
-    """One row per ingest tick that actually processed something. No-op
-    ticks (the common case - the tick fires every 2 minutes) write
-    nothing, so this table is a log of real work, not of wake-ups."""
+    """One row per ingestion run, including no-op scheduled sweeps, so
+    failures and wake-ups remain visible in the observability ledger."""
 
     __tablename__ = "obs_ingest_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # `runs.id` of the scheduler run this happened under, when there is
-    # one (`/ingest` and tests call the tick directly).
+    # `runs.id` of the scheduler run this happened under, when there is one.
     scheduler_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

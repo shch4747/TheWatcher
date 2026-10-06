@@ -81,6 +81,17 @@ root) answers it by queueing the `backfill_ingest` job, which runs the
 WA Agent's `IngestionPipeline.run_drained` for that channel under the
 same lock as `ingest_tick`.
 
+Bot Admin `/ingest` commands and the Chat Agent's `ingest_channel` tool
+use the same `IngestionPipeline.run_drained` path for one channel. The
+composition root runs them through the Scheduler's non-blocking
+`ingest_tick` lock, so a request reports busy instead of queuing behind a
+scheduled tick or backfill. `/ingest` is parsed and authorized by the
+Gateway without a model call. The Chat Agent tool is exposed only to Bot
+Admins and can select a watched channel by JID, title, or initiative.
+The Chat Agent's channel-thread listing orders active and stale threads
+by most recent message while ingestion, lifecycle, and wiki index callers
+retain the Thread Store's default ordering.
+
 Observability is a leaf: `shared/observability` depends on `shared.db`,
 `shared.config` and `shared.wiki` (the client protocol it wraps) and on
 nothing above them. In particular it never imports `shared.gateway` -

@@ -287,6 +287,29 @@ async def test_ingest_command_refuses_non_admin():
     assert "only bot admins" in reply.lower()
 
 
+async def test_ingest_command_targets_its_channel_and_requires_bot_admin(vault):
+    from shared.gateway.command_handlers import handle_command
+    from shared.gateway.runtime import GatewayRuntime
+
+    runtime = GatewayRuntime()
+    called: list[str] = []
+
+    async def ingest(channel_jid: str) -> str:
+        called.append(channel_jid)
+        return "Ingested this channel."
+
+    runtime.hooks.register_channel_ingest_hook(ingest)
+    reply = await handle_command(PROJECT_GROUP, ADMIN, "/ingest", runtime, vault)
+    assert reply == "Ingested this channel."
+    assert called == [PROJECT_GROUP]
+
+    denied = await handle_command(
+        PROJECT_GROUP, "918888888888@s.whatsapp.net", "/ingest", runtime, vault
+    )
+    assert denied == "Only Bot Admins can /ingest."
+    assert called == [PROJECT_GROUP]
+
+
 async def test_chat_agent_is_off_until_toggled(vault: LocalDirClient):
     from shared.gateway.agent_switch import chat_agent_enabled, set_chat_agent_enabled
 

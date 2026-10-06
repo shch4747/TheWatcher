@@ -135,6 +135,133 @@ async def test_mention_answers_and_quotes_the_trigger(vault: LocalDirClient):
     assert sent.get("reply_message_id") == "q1"
 
 
+async def test_admin_chat_agent_receives_on_demand_ingest_tool_only(vault, monkeypatch):
+    from agents.wa_agent import chat as chat_module
+
+    admin = "admin@s.whatsapp.net"
+
+    async def is_admin(sender: str) -> bool:
+        return _is_admin(sender, admin)
+
+    monkeypatch.setattr(chat_module, "is_bot_admin", is_admin)
+    calls: list[str] = []
+
+    async def ingest(channel_jid: str) -> str:
+        calls.append(channel_jid)
+        return "Ingested."
+
+    class ToolSpy(EchoWorker):
+        def __init__(self):
+            super().__init__("answer")
+            self.tools = []
+
+        async def generate_with_tools(self, prompt: str, **kwargs):  # type: ignore[override]
+            self.tools = kwargs["tools"]
+            return await self.generate(prompt, system=kwargs.get("system"))
+
+    regular_worker = ToolSpy()
+    await wa_agent.handle_chat_message(
+        inbound("regular-q", CHANNEL_JID, "@watcher latest?", sender="member@s.whatsapp.net"),
+        regular_worker,
+        vault,
+        ingest,
+    )
+    assert all(tool.__name__ != "ingest_channel" for tool in regular_worker.tools)
+
+    admin_worker = ToolSpy()
+    await wa_agent.handle_chat_message(
+        inbound("admin-q", CHANNEL_JID, "@watcher latest?", sender=admin),
+        admin_worker,
+        vault,
+        ingest,
+    )
+    ingest_tool = next(tool for tool in admin_worker.tools if tool.__name__ == "ingest_channel")
+    assert "Bot Admins" in (ingest_tool.__doc__ or "")
+    assert calls == []  # The model exposes the tool; it decides whether to call it.
+
+
+def _is_admin(sender: str, admin: str) -> bool:
+    return sender == admin
+
+
+async def test_ingest_tool_resolves_named_channel_and_rechecks_admin(monkeypatch):
+    from agents.wa_agent import wiki_tools
+    from shared.gateway.interface import ChannelInfo
+
+    admin = "admin@s.whatsapp.net"
+    authorized = True
+    calls: list[str] = []
+    channels = [
+        ChannelInfo(jid="current@g.us", title="Current", kind="project", initiative="Alpha"),
+        ChannelInfo(jid="other@g.us", title="Other", kind="event", initiative="Beta"),
+    ]
+
+    async def is_admin(_sender: str) -> bool:
+        return authorized
+
+    async def list_watched_channels() -> list[ChannelInfo]:
+        return channels
+
+    async def ingest(channel_jid: str) -> str:
+        calls.append(channel_jid)
+        return "Ingested."
+
+    monkeypatch.setattr(wiki_tools, "is_bot_admin", is_admin)
+    monkeypatch.setattr(wiki_tools, "list_channels", list_watched_channels)
+    tool = wiki_tools.channel_ingest_tool(admin, "current@g.us", ingest)
+
+    assert await tool("Beta") == "Ingested."
+    assert calls == ["other@g.us"]
+    channels.append(
+        ChannelInfo(jid="third@g.us", title="Third", kind="project", initiative="Beta")
+    )
+    assert "ambiguous" in await tool("Beta")
+    authorized = False
+    assert "Only Bot Admins" in await tool("Beta")
+    assert calls == ["other@g.us"]
+
+
+async def test_channel_thread_listing_requests_recent_order_and_shows_date(monkeypatch):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from agents.wa_agent import wiki_tools
+    from shared.gateway.interface import ChannelInfo
+
+    requested_orders: list[str] = []
+
+    class Store:
+        def __init__(self, _vault, _channel):
+            pass
+
+        async def threads(self, order="slug"):
+            requested_orders.append(order)
+            return [
+                SimpleNamespace(
+                    path="channels/demo/new.md",
+                    title="Newest",
+                    state="active",
+                    summary="Most recent discussion.",
+                    last_message_at=datetime(2026, 10, 4, tzinfo=UTC),
+                ),
+                SimpleNamespace(
+                    path="channels/demo/old.md",
+                    title="Older",
+                    state="stale",
+                    summary="Earlier discussion.",
+                    last_message_at=datetime(2026, 9, 20, tzinfo=UTC),
+                ),
+            ]
+
+    monkeypatch.setattr(wiki_tools, "ThreadStore", Store)
+    channel = ChannelInfo(jid="demo@g.us", title="Demo", kind="project", initiative="Demo")
+    listed = await wiki_tools.list_threads(object(), channel)
+
+    assert requested_orders == ["recent"]
+    assert listed.index("Newest") < listed.index("Older")
+    assert "last 2026-10-04" in listed
+
+
 async def test_prompt_answers_only_the_message_that_addressed_the_bot(vault: LocalDirClient):
     await _buffer(CHANNEL_JID, "ctx-1", "CONTEXT-the hall is Friday", sender="a@x")
 
