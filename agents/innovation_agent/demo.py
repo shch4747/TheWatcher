@@ -1,70 +1,53 @@
 """
-Runnable demo: fires all four lanes against MockMemory, prints what
-would land in a human's review queue, and — new — publishes every
-pitch that survives the gate as a pending review stub in the local
-Lapis stand-in (./lapis_vault/), so the feedback loop runs on
-whatever ideas actually came out of this run instead of hardcoded
-samples.
+Runnable demo: fires all four lanes, prints what would land in a human's
+review queue. Remedial, bridged, and frontier run against a real local
+vault (./demo_vault, a LocalDirClient); event is still on MockMemory
+until its turn to go real.
 
 Run:  python demo.py
-With a real LLM: export OPENROUTER_API_KEY=... first 
+With a real LLM: export OPENROUTER_API_KEY=... first
 Without a key, everything still runs end to end on stub ideas.
 """
-from memory_interface import MockMemory
-from schemas import PitchStatus
-from local_lapis_client import LocalFileLapisClient
-from lapis_feedback_store import publish_pending_review
-import pipeline
-from shared.wiki.lapis_client import LocalDirClient
 from pathlib import Path
 
-vault = LocalDirClient(root=Path("./demo_vault"))
-pipeline.handle_project_closed(vault, "projects/proj-auth-b.md")
-pipeline.run_weekly_sweep(vault, memory)
+from memory_interface import MockMemory
+from schemas import PitchStatus
+import pipeline
+from shared.wiki.lapis_client import LocalDirClient
 
-def _report(label: str, pitches, lapis_client) -> None:
+
+def _report(label: str, pitches) -> None:
     print(f"\n=== {label} ===")
     for p in pitches:
         print(f"[{p.status.value}] {p.idea.title} :: {p.idea.statement}")
         if p.gate_notes:
             print(f"    gate notes: {p.gate_notes}")
-
         if p.status == PitchStatus.PENDING:
-            publish_pending_review(
-                lapis_client,
-                idea_id=p.id,
-                lane=p.idea.origin.value,
-                idea_summary=f"{p.idea.title} — {p.idea.statement}",
-            )
-            print(f"    -> queued for human review: lapis_vault/Ideas/Feedback/{p.idea.origin.value}.md")
+            print("    -> published to the vault for human review (innovation/)")
 
 
 def main():
+    vault = LocalDirClient(root=Path("./demo_vault"))
     memory = MockMemory()
-    lapis_client = LocalFileLapisClient("./lapis_vault")
 
     _report(
-        "Project closure (proj-auth-b) -> grounded lane",
-        pipeline.handle_project_closed(memory, "proj-auth-b"),
-        lapis_client,
+        "Project closure (proj-auth-b) -> remedial lane",
+        pipeline.handle_project_closed(vault, "projects/proj-auth-b.md"),
     )
 
     _report(
-        "New research deep-dive (res-1) -> bridged lane",
-        pipeline.handle_research_deepdive(memory, "res-1"),
-        lapis_client,
+        "New 'deep' research finding -> bridged lane",
+        pipeline.handle_research_deepdive(vault, "res-1"),
     )
 
     _report(
-        "Weekly sweep -> grounded (idle capability) + free",
-        pipeline.run_weekly_sweep(memory),
-        lapis_client,
+        "Weekly sweep -> remedial (idle capability) + frontier",
+        pipeline.run_weekly_sweep(vault),
     )
 
     _report(
-        "Events sweep -> events lane",
+        "Events sweep -> event lane (still MockMemory)",
         pipeline.run_events_sweep(memory),
-        lapis_client,
     )
 
 
