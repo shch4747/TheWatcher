@@ -110,9 +110,10 @@ there and *sent* by `main.py` (ADR-0013).
 - `agents/wa_agent` and `agents/project_agent` never import each other;
   both go through `shared/*` interfaces for everything (identity,
   wiki I/O, models, scheduling).
-- `agents/innovation_agent` and `agents/research_agent` are frozen
-  (ADR-0010) and have zero import relationship with anything above -
-  they predate this architecture entirely.
+- `agents/innovation_agent` and `agents/research_agent` are active again
+  (ADR-0016 lifted the ADR-0010 freeze). The Innovation Agent reads the
+  vault through `shared.wiki` and is being moved off its pre-pivot
+  `MemoryInterface` one lane at a time; only the event lane still uses it.
 
 ## Test seam (Testing Decisions, Seam 1)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from datetime import date
 
 from schemas import Idea
@@ -19,6 +20,13 @@ from shared.wiki.interface import (
     read_if_exists,
     render_new_idea_page,
     slugify,
+)
+
+# Matches a line the Research Agent's digestWriter.ts writes, e.g.:
+# "- [arxiv:2401.05432] **[FlashAttention-3](https://...)** | topic: Efficient Transformers | depth: deep"
+_DIGEST_LINE = re.compile(
+    r"^- \[(?P<id>[^\]]+)\] \*\*\[(?P<title>[^\]]+)\]\((?P<url>[^)]+)\)\*\* "
+    r"\| topic: (?P<topic>[^|]+) \| depth: (?P<depth>\w+)$"
 )
 
 
@@ -103,6 +111,52 @@ async def get_reviewed_ideas(vault: VaultClient, lane: str | None = None) -> lis
     return reviewed
 
 
+async def get_research_findings(vault: VaultClient, depth: str | None = None) -> list[dict]:
+    """Parses the bullet lines out of `research/digests/*.md` pages
+    written by the Research Agent's digestWriter — the only form
+    research findings take in the real vault (there's no separate
+    per-entry research page). `depth`, when given, filters to
+    "light" or "deep" findings only."""
+    findings: list[dict] = []
+    for path in await vault.list("research/digests/"):
+        result = await vault.read(path)
+        for line in result.content.splitlines():
+            match = _DIGEST_LINE.match(line.strip())
+            if not match:
+                continue
+            finding = match.groupdict()
+            finding["topic"] = finding["topic"].strip()
+            if depth and finding["depth"] != depth:
+                continue
+            findings.append(finding)
+    return findings
+
+
+async def get_capabilities_far_from(vault: VaultClient, topic: str, k: int = 5) -> list[dict]:
+    """Capabilities whose name doesn't obviously mention `topic`, capped
+    at k. Simple substring heuristic for now — same honest starting
+    point the frozen LapisAdapter used, not a claim of real semantic
+    distance."""
+    usage = await get_capability_usage(vault)
+    topic_lower = topic.lower()
+    far = [
+        {"name": cap, "project_ids": ids}
+        for cap, ids in usage.items()
+        if topic_lower not in cap.lower()
+    ]
+    return far[:k]
+
+
+async def get_org_snapshot(vault: VaultClient) -> str:
+    active = []
+    for path in await vault.list("projects/"):
+        result = await vault.read(path)
+        fm = parse_page(result.content).frontmatter
+        if fm.status == "active":
+            active.append(fm.title)
+    return f"Active ARIES projects: {', '.join(active) if active else 'none'}."
+
+
 async def get_record(vault: VaultClient, path: str) -> dict | None:
     result = await read_if_exists(vault, path)
     if result is None:
@@ -128,3 +182,15 @@ def get_capability_usage_sync(vault: VaultClient) -> dict[str, list[str]]:
 
 def get_record_sync(vault: VaultClient, path: str) -> dict | None:
     return asyncio.run(get_record(vault, path))
+
+
+def get_research_findings_sync(vault: VaultClient, depth: str | None = None) -> list[dict]:
+    return asyncio.run(get_research_findings(vault, depth))
+
+
+def get_capabilities_far_from_sync(vault: VaultClient, topic: str, k: int = 5) -> list[dict]:
+    return asyncio.run(get_capabilities_far_from(vault, topic, k))
+
+
+def get_org_snapshot_sync(vault: VaultClient) -> str:
+    return asyncio.run(get_org_snapshot(vault))

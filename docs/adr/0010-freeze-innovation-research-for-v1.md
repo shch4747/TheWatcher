@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0016
 date: 2026-09-20
 ---
 # Innovation Agent and Research Agent are frozen for the duration of v1

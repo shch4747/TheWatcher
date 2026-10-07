@@ -1,7 +1,7 @@
 """
 Wires triggers -> lanes -> gate -> human queue -> memory writeback.
-Two pipelines run side by side: remedial is real (via `vault`); bridged,
-frontier, event are still on `memory` until each gets its turn.
+Two pipelines run side by side: remedial, bridged, and frontier are real
+(via `vault`); event is still on `memory` until its turn.
 """
 import uuid
 from datetime import datetime, timezone
@@ -62,14 +62,14 @@ def handle_project_closed(vault: VaultClient, project_path: str) -> list[Pitch]:
     return _to_pitches_real(ideas, vault)
 
 
-def handle_research_deepdive(memory: MemoryInterface, entry_id: str) -> list[Pitch]:
-    return _to_pitches(lanes.bridged_on_research(memory, entry_id), memory)
+def handle_research_deepdive(vault: VaultClient, finding_id: str) -> list[Pitch]:
+    return _to_pitches_real(lanes.bridged_on_research(vault, finding_id), vault)
 
 
-def run_weekly_sweep(vault: VaultClient, memory: MemoryInterface) -> list[Pitch]:
+def run_weekly_sweep(vault: VaultClient) -> list[Pitch]:
     remedial_ideas = lanes.grounded_weekly_sweep(vault)
-    frontier_ideas = lanes.free_weekly(memory)
-    return _to_pitches_real(remedial_ideas, vault) + _to_pitches(frontier_ideas, memory)
+    frontier_ideas = lanes.free_weekly(vault)
+    return _to_pitches_real(remedial_ideas, vault) + _to_pitches_real(frontier_ideas, vault)
 
 
 def run_events_sweep(memory: MemoryInterface) -> list[Pitch]:

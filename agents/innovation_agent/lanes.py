@@ -82,29 +82,31 @@ def grounded_weekly_sweep(vault: VaultClient) -> list[Idea]:
     return generate_ideas(prompt, Origin.REMEDIAL)
 
 
-def bridged_on_research(memory: MemoryInterface, entry_id: str) -> list[Idea]:
-    """Fires when a research entry gets a deep-dive. Deliberately looks
-    PAST the obvious connection that earned it the deep-dive, at
-    capabilities the deep-dive process didn't already link it to."""
-    entry = memory.get_research_entry(entry_id)
+def bridged_on_research(vault: VaultClient, finding_id: str) -> list[Idea]:
+    """Fires when a 'deep' research finding lands in a digest (research
+    Agent's trigger, not this agent's). Deliberately looks PAST the
+    obvious connection that earned it 'deep' depth, at capabilities the
+    digest's topic tag didn't already link it to."""
+    findings = interface.get_research_findings_sync(vault, depth="deep")
+    entry = next((f for f in findings if f["id"] == finding_id), None)
     if not entry:
         return []
-    far_capabilities = memory.get_capabilities_far_from(entry.get("topic", ""))
+    far_capabilities = interface.get_capabilities_far_from_sync(vault, entry["topic"])
     prompt = (
-        f"New research: '{entry.get('title')}'. "
+        f"New research: '{entry['title']}'. "
         f"Here are ARIES capabilities NOT obviously related to it: {far_capabilities}. "
         "Is there a real connection anyway — same underlying mechanism, different surface "
         "domain? Only propose something if the mechanism genuinely transfers, not just if the "
         "topics sound similar."
-    ) + _feedback_context(memory, "bridged")
+    ) + _feedback_context_real(vault, "bridged")
     return generate_ideas(prompt, Origin.BRIDGED)
 
 
-def free_weekly(memory: MemoryInterface) -> list[Idea]:
+def free_weekly(vault: VaultClient) -> list[Idea]:
     """No anchor at all. Oversampled; the gate and human review do the
     filtering, not this step."""
-    snapshot = memory.get_org_snapshot()
-    digest = memory.get_light_research_digest(since="")
+    snapshot = interface.get_org_snapshot_sync(vault)
+    digest = interface.get_research_findings_sync(vault, depth="light")
     titles = [d["title"] for d in digest]
     prompt = (
         f"ARIES today: {snapshot}\n"
@@ -112,8 +114,8 @@ def free_weekly(memory: MemoryInterface) -> list[Idea]:
         "Propose an idea that would surprise a technically sharp ARIES member — something "
         "whose connection to ARIES isn't obvious until explained. No requirement that it ties "
         "to anything specific above."
-    ) + _feedback_context(memory, "free")
-    return generate_ideas(prompt, Origin.FREE, n=15)
+    ) + _feedback_context_real(vault, "frontier")
+    return generate_ideas(prompt, Origin.FRONTIER, n=15)
 
 
 def events_weekly_sweep(memory: MemoryInterface) -> list[Idea]:
