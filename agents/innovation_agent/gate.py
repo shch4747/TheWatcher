@@ -65,7 +65,7 @@ def check_redundancy(idea: Idea, pitch_history: list[dict]) -> GateResult:
 
 
 def check_relevance(idea: Idea, org_snapshot: str) -> GateResult:
-    if idea.origin == Origin.REMIDIAL:
+    if idea.origin == Origin.REMEDIAL:
         return GateResult(True, PitchStatus.PENDING, [])
     if not idea.statement.strip():
         return GateResult(False, PitchStatus.GATED_OUT, ["empty statement"])
