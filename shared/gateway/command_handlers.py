@@ -1,11 +1,18 @@
 """One handler per admin command. `handle_command` only parses and dispatches."""
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta, timezone
 
-from shared.cms.interface import MEMBER_MATCH_THRESHOLD, default_cms_client, rank_member
+from shared.cms.interface import (
+    MEMBER_MATCH_THRESHOLD,
+    MemberRecord,
+    default_cms_client,
+    rank_member,
+)
 from shared.config import settings
 from shared.gateway.agent_switch import chat_agent_enabled, toggle_chat_agent
+from shared.gateway.auto_links import is_rejected, record_notice
 from shared.gateway.channels import (
     admin_and_channel_counts,
     get_channel,
@@ -263,6 +270,25 @@ async def _link_identity(wa_identity: str, title: str, cms_id: str | None, linke
         await link_member(wa_identity, title, cms_id, linked_by=linked_by)
 
 
+async def _announce_link(
+    runtime: GatewayRuntime,
+    channel_jid: str,
+    label: str,
+    member: MemberRecord,
+    identities: list[str],
+) -> bool:
+    try:
+        text = f"Linked {label} to [[{member.title}]]. React ❌ to undo."
+        result = await runtime.send(channel_jid, text)
+        if not result.message_id:
+            return False
+        await record_notice(result.message_id, channel_jid, member.title, member.cms_id, identities)
+        return True
+    except Exception:
+        logging.getLogger(__name__).warning("Failed to announce link notice")
+        return False
+
+
 async def setup_members(channel_jid: str, requested_by: str, runtime: GatewayRuntime) -> str:
     """Match every group participant to the ARIES roster. A confident
     fuzzy match is linked immediately. Everyone else is listed so an
@@ -282,6 +308,7 @@ async def setup_members(channel_jid: str, requested_by: str, runtime: GatewayRun
     linked: list[str] = []
     unsure: list[str] = []
     already = 0
+    no_undo = 0
     for person in participants:
         identities = [person.jid]
         if person.lid and person.lid not in identities:
@@ -301,9 +328,14 @@ async def setup_members(channel_jid: str, requested_by: str, runtime: GatewayRun
         ranked = rank_member(person.display_name or "", roster)
         if ranked is not None and ranked[1] >= MEMBER_MATCH_THRESHOLD:
             member, _score = ranked
+            if await is_rejected(identities, member.title):
+                unsure.append(f"- {_participant_label(person)} (undone before, nearest [[{member.title}]])")
+                continue
             for identity in identities:
                 await link_member(identity, member.title, member.cms_id, linked_by=requested_by)
             linked.append(f"- {_participant_label(person)} → [[{member.title}]]")
+            if not await _announce_link(runtime, channel_jid, _participant_label(person), member, identities):
+                no_undo += 1
             continue
         hint = f" (nearest [[{ranked[0].title}]])" if ranked is not None else ""
         unsure.append(f"- {_participant_label(person)}{hint}")
@@ -312,6 +344,8 @@ async def setup_members(channel_jid: str, requested_by: str, runtime: GatewayRun
         "*Members*",
         f"Linked {len(linked)}, already linked {already}, {len(unsure)} need a manual /link.",
     ]
+    if no_undo > 0:
+        lines.append(f"{no_undo} link(s) could not offer undo.")
     if linked:
         lines += ["", "Linked:", *linked]
     if unsure:
