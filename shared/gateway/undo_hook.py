@@ -4,9 +4,16 @@ from __future__ import annotations
 import logging
 
 from shared.gateway.auto_links import undo_notice
-from shared.gateway.interface import is_bot_admin, send
+from shared.gateway.channels import is_bot_admin
 
 CROSS = {"\u274c", "\u274c\ufe0f"}
+
+
+async def send(channel: str, text: str) -> None:
+    """Import the gateway interface lazily to avoid an import cycle."""
+    from shared.gateway.interface import send as _send
+
+    await _send(channel, text)
 
 
 async def handle_undo_reaction(reactor: str, message_id: str | None, emoji: str | None) -> str | None:

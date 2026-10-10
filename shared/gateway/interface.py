@@ -50,6 +50,7 @@ from shared.gateway.runtime import (
     ReactionHook,
 )
 from shared.gateway.types import ChannelInfo, MemberLink, SendResult
+from shared.gateway.undo_hook import handle_undo_reaction as handle_undo_reaction
 from shared.gateway.webhook import receive_webhook as _receive_webhook
 from shared.gateway.webhook import verify_signature
 from shared.wiki.interface import VaultClient
@@ -159,6 +160,7 @@ __all__ = [
     "runtime",
     "register_message_hook",
     "register_reaction_hook",
+    "handle_undo_reaction",
     "register_channel_watched_hook",
     "register_channel_ingest_hook",
     "ChannelWatchedHook",

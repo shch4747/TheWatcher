@@ -32,6 +32,7 @@ from shared.gateway.interface import (
     ChannelInfo,
     InboundMessage,
     get_channel,
+    handle_undo_reaction,
     list_channels,
     notify_logs,
     pending_messages,
@@ -41,7 +42,6 @@ from shared.gateway.interface import (
     register_message_hook,
     register_reaction_hook,
 )
-from shared.gateway.undo_hook import handle_undo_reaction
 from shared.inbox.interface import register_consumer
 from shared.models.interface import (
     assignment_model,
