@@ -130,6 +130,33 @@ class Proposal(Base):
     resolved_by: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class AutoLinkNotice(Base):
+    """Notice posted when /setup-members auto-links members, revocable via ❌."""
+
+    __tablename__ = "auto_link_notices"
+
+    message_id: Mapped[str] = mapped_column(String, primary_key=True)
+    channel: Mapped[str] = mapped_column(String)
+    member_title: Mapped[str] = mapped_column(String)
+    cms_member_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    identities: Mapped[str] = mapped_column(Text)  # JSON list of the linked identities
+    status: Mapped[str] = mapped_column(String, default="active")  # active | undone
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class RejectedLink(Base):
+    """Record of an auto-link undone via ❌, preventing immediate re-linking."""
+
+    __tablename__ = "rejected_links"
+
+    wa_identity: Mapped[str] = mapped_column(String, primary_key=True)
+    member_title: Mapped[str] = mapped_column(String, primary_key=True)
+    rejected_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class OutboundLog(Base):
     """Every send, mirrored to meta/audit/<yyyy-mm>.md by the wiki layer
     once it exists (Phase 1+); this table is the source of truth for it."""

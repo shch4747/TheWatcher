@@ -32,6 +32,7 @@ from shared.gateway.interface import (
     ChannelInfo,
     InboundMessage,
     get_channel,
+    handle_undo_reaction,
     list_channels,
     notify_logs,
     pending_messages,
@@ -102,6 +103,7 @@ class WatcherApplication:
         register_message_hook(self._chat_hook)
         register_channel_ingest_hook(self._ingest_channel_on_demand)
         register_reaction_hook(handle_reaction)
+        register_reaction_hook(handle_undo_reaction)
         register_channel_watched_hook(self._channel_watched_hook)
         register_health_line(pending_proposals_line)
         register(
