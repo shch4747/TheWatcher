@@ -26,7 +26,7 @@ def test_setup_jobs_registers_hooks_jobs_and_inbox_consumer():
     setup_jobs()
 
     assert len(gateway._message_hooks) == 1
-    assert len(gateway._reaction_hooks) == 1
+    assert len(gateway._reaction_hooks) == 2
     assert len(gateway._health_lines) == 1
     assert len(gateway.runtime.hooks.channel_watched_hooks) == 1
 
