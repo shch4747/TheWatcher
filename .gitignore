@@ -223,3 +223,8 @@ watcher.db
 
 # Node
 node_modules/
+testbench_data/
+my_data/.DS_Store
+
+my_data/
+.DS_Store

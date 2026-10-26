@@ -1,0 +1,14 @@
+‎[12/10/2025, 09:01:00] Drone Project: ‎Messages and calls are end-to-end encrypted. Only people in this chat can read, listen to, or share them. Learn more.
+[12/10/2025, 09:01:05] Aman: ‎created group “Drone Project”
+[13/10/2025, 10:15:42] Aman Sharma: Team, flight controller board arrived
+Who is testing the PID tuning tomorrow?
+[13/10/2025, 10:16:05] Riya: I can do it after 4pm
+[13/10/2025, 10:16:30] Riya: ok
+[13/10/2025, 10:16:31] Riya: ok
+[13/10/2025, 10:20:11] ‎+91 98765 43210: need the budget sheet for motors
+[13/10/2025, 10:21:00] Aman Sharma: ‎<attached: 00000012-PHOTO-2025-10-13.jpg>
+[14/10/2025, 18:30:09] Aman Sharma: Uploaded the tuning notes
+[14/10/2025, 18:32:00] Aman Sharma: ‎added Karan
+[15/10/2025, 11:00:20] Karan: Sharing the ESC datasheet, please review before Friday
+[16/10/2025, 09:12:00] Riya: Karan, can you own the ESC review? Deadline Friday
+[16/10/2025, 09:14:10] Karan: Yes, I will finish by Thursday evening

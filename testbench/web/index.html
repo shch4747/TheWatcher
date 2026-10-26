@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>testbench</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --ink:#1c2430; --ink2:#5b6676; --line:#dfe3ea; --accent:#2f5fd0;
+  --tl:46%; --chatter:#c9cfd9; --warn:#b4540a; --ok:#18794e; --bad:#b3261e;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#12161c; --panel:#1a2029; --ink:#e6eaf0; --ink2:#98a3b3; --line:#2b3340; --accent:#7aa2ff; --tl:62%; --chatter:#3a4350; --warn:#f0a35e; --ok:#52c28a; --bad:#ff8b82}
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:14px/1.45 var(--font);background:var(--bg);color:var(--ink);display:grid;grid-template-columns:250px 1fr;overflow:hidden}
+button,select,input,textarea{font:inherit;color:inherit}
+button{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+button:hover{border-color:var(--accent)} button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,.card:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff} button.danger{color:var(--bad)}
+button:disabled{opacity:.45;cursor:default}
+aside{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+aside header{padding:12px 14px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
+aside h1{font-size:15px;margin:0;font-weight:650}
+#list{overflow:auto;flex:1}
+.exp{padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+.exp:hover{background:var(--bg)} .exp.sel{background:var(--bg);box-shadow:inset 3px 0 0 var(--accent)}
+.exp b{font-weight:600} .exp small{display:block;color:var(--ink2)}
+.st{font-size:12px;color:var(--ink2)} .st.done,.st.done_with_errors{color:var(--ok)} .st.failed,.st.crashed{color:var(--bad)} .st.running,.st.queued{color:var(--warn)}
+main{display:flex;flex-direction:column;min-width:0;min-height:0}
+#top{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+#top h2{margin:0 0 2px;font-size:17px}
+#meta{color:var(--ink2);font-size:13px} #msg{margin-top:6px;font-size:13px}
+#msg.err{color:var(--bad)} .actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}
+#bar{display:flex;gap:8px;align-items:center;padding:8px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tab{border-radius:999px;padding:3px 12px} .tab.sel{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+#bar .sp{flex:1} #bar label{color:var(--ink2);font-size:13px;display:flex;gap:5px;align-items:center}
+#work{flex:1;display:grid;grid-template-columns:1fr 360px;min-height:0}
+#transcript{overflow:auto;padding:10px 18px 40px}
+#threads{overflow:auto;border-left:1px solid var(--line);padding:12px;background:var(--panel)}
+.empty{color:var(--ink2);padding:40px 10px;text-align:center}
+.day{margin:14px 0 4px;color:var(--ink2);font-size:12px;border-bottom:1px solid var(--line);padding-bottom:2px}
+.row{display:flex;align-items:stretch}
+.rail{width:9px;flex:none;margin-right:5px;background:var(--c,transparent)}
+.rail.none{background:repeating-linear-gradient(to bottom,var(--chatter) 0 3px,transparent 3px 7px);width:3px;margin:0 11px 0 3px}
+.rail.start{border-radius:5px 5px 0 0} .rail.end{border-radius:0 0 5px 5px}
+.body{padding:3px 0 3px 6px;min-width:0;flex:1}
+.lab{font-size:12px;font-weight:600;color:hsl(var(--h) 55% var(--tl));cursor:pointer;margin-top:6px;display:block;background:none;border:0;padding:0;text-align:left}
+.who{font-weight:600;margin-right:6px} .t{color:var(--ink2);font-size:12px} .txt{white-space:pre-wrap;overflow-wrap:anywhere}
+.media{color:var(--ink2);font-style:italic}
+.row.dim{opacity:.28}
+.card{border:1px solid var(--line);border-left:5px solid hsl(var(--h) 55% var(--tl));border-radius:6px;padding:8px 10px;margin-bottom:8px;cursor:pointer;background:var(--bg)}
+.card.sel{outline:2px solid hsl(var(--h) 55% var(--tl))} .card h4{margin:0 0 2px;font-size:14px}
+.card .n{color:var(--ink2);font-size:12px} .card p{margin:4px 0 0;color:var(--ink2);font-size:13px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.card button{margin-top:6px;font-size:12px;padding:2px 8px}
+#threads h3{margin:6px 0 8px;font-size:13px;color:var(--ink2);font-weight:600}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);padding:18px;max-width:560px;width:92vw}
+dialog::backdrop{background:#0008} dialog h3{margin:0 0 10px}
+dialog label{display:block;margin:8px 0 2px;font-size:13px;color:var(--ink2)}
+dialog input[type=text],dialog input[type=date],dialog textarea{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+dialog .two{display:grid;grid-template-columns:1fr 1fr;gap:10px} dialog menu{display:flex;gap:8px;justify-content:flex-end;padding:0;margin:14px 0 0}
+pre#page{white-space:pre-wrap;font:12px/1.5 var(--mono);max-height:70vh;overflow:auto;margin:0}
+@media (max-width:900px){body{grid-template-columns:1fr;overflow:auto}aside{max-height:200px}#work{grid-template-columns:1fr}#threads{border-left:0;border-top:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<aside>
+  <header><h1>Experiments</h1><button class="primary" id="new">New</button></header>
+  <div id="list"></div>
+</aside>
+<main>
+  <div id="top"><div class="empty">Pick an experiment, or create one.</div></div>
+  <div id="bar" hidden></div>
+  <div id="work" hidden><div id="transcript" tabindex="0"></div><div id="threads"></div></div>
+</main>
+
+<dialog id="dlgNew"><form method="dialog" id="fNew">
+  <h3>New experiment</h3>
+  <label>Name</label><input type="text" name="name" required placeholder="baseline">
+  <label>Data folder (groups.csv, exports.csv, members.csv)</label><input type="text" name="data_dir" required placeholder="/path/to/my_data">
+  <label>Groups (comma-separated titles; empty = all)</label><input type="text" name="groups">
+  <div class="two"><div><label>From</label><input type="date" name="date_from"></div><div><label>To</label><input type="date" name="date_to"></div></div>
+  <label>Settings to change (one KEY=VALUE per line, e.g. ASSIGNMENT_MODE=jev)</label><textarea name="env" rows="3"></textarea>
+  <label><input type="checkbox" name="nocache"> Always call the model (ignore the cache)</label>
+  <p id="newErr" class="st failed"></p>
+  <menu><button type="button" data-close>Cancel</button><button class="primary" value="ok">Create</button></menu>
+</form></dialog>
+<dialog id="dlgPage"><h3 id="pageTitle"></h3><pre id="page"></pre><menu><button data-close>Close</button></menu></dialog>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const h = (tag, props = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v; else if (k === 'style') e.style.cssText = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) e.append(c.nodeType ? c : document.createTextNode(c));
+  return e;
+};
+async function api(path, method = 'GET', body) {
+  const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+  return (r.headers.get('content-type') || '').includes('json') ? r.json() : r.text();
+}
+
+const S = { exps: [], id: null, d: null, jid: null, cmp: '', a: null, b: null, focus: null, hideChatter: false, note: '', err: false };
+let poll = null;
+const hue = i => (i * 137.5 + 205) % 360;
+
+async function loadList() {
+  S.exps = await api('/api/experiments');
+  const list = $('#list'); list.replaceChildren();
+  if (!S.exps.length) list.append(h('div', { class: 'empty' }, 'No experiments yet.'));
+  for (const e of S.exps)
+    list.append(h('div', { class: 'exp' + (e.id === S.id ? ' sel' : ''), tabindex: 0, onclick: () => select(e.id), onkeydown: ev => ev.key === 'Enter' && select(e.id) },
+      h('b', {}, e.name), h('small', {}, e.id + ' · ', h('span', { class: 'st ' + e.state }, e.state)),
+      h('small', {}, [e.date_from, e.date_to].filter(Boolean).join(' → ') || 'all dates')));
+}
+
+async function select(id) {
+  S.id = id; S.focus = null; S.cmp = ''; S.b = null; S.note = ''; S.err = false;
+  await refresh(true); await loadList();
+}
+
+async function refresh(firstLoad) {
+  if (!S.id) return;
+  try { S.d = await api('/api/experiments/' + S.id); } catch (e) { S.id = null; return; }
+  const chs = S.d.channels;
+  if (!chs.find(c => c.jid === S.jid) || firstLoad) S.jid = chs.length ? chs[0].jid : null;
+  await loadStreams(); renderAll();
+  clearInterval(poll);
+  if (['running', 'queued'].includes(S.d.status.state)) poll = setInterval(async () => { await refresh(false); loadList(); }, 2500);
+}
+
+async function loadStreams() {
+  S.a = S.jid ? await api(`/api/experiments/${S.id}/stream?jid=${encodeURIComponent(S.jid)}`) : null;
+  S.b = S.jid && S.cmp ? await api(`/api/experiments/${S.cmp}/stream?jid=${encodeURIComponent(S.jid)}`).catch(() => null) : null;
+}
+
+function renderAll() { renderTop(); renderBar(); renderTranscript(); renderThreads(); }
+
+function renderTop() {
+  const top = $('#top'); top.replaceChildren();
+  const d = S.d; if (!d) return;
+  const st = d.status, c = d.config, running = ['running', 'queued'].includes(st.state);
+  const used = (d.model_usage || []).reduce((a, u) => ({ calls: a.calls + u.calls, cost: a.cost + u.cost_usd }), { calls: 0, cost: 0 });
+  const hits = (d.cache || []).reduce((a, x) => a + x.hits, 0);
+  const env = Object.entries(c.env || {}).map(([k, v]) => k + '=' + v).join(', ');
+  const last = (d.progress || []).slice(-1)[0];
+  top.append(
+    h('h2', {}, c.name, ' ', h('span', { class: 'st ' + st.state }, st.state)),
+    h('div', { id: 'meta' }, `${d.id} · ${c.groups ? c.groups.join(', ') : 'all groups'} · ${[c.date_from, c.date_to].filter(Boolean).join(' → ') || 'all dates'}`
+      + (env ? ' · ' + env : '') + (used.calls ? ` · ${used.calls} model calls, ${hits} cached, $${used.cost.toFixed(4)}` : '')),
+    (S.note || st.error || last) && h('div', { id: 'msg', class: (S.err || st.error) ? 'err' : '' },
+      S.note || st.error || (running && last ? `${last.kind}: ${Object.entries(last).filter(([k]) => !['t', 'kind'].includes(k)).map(([k, v]) => k + '=' + v).join(' ')}` : '')),
+    d.errors.length ? h('div', { id: 'msg', class: 'err' }, d.errors.map(e => `${e.group}: ${e.error}`).join(' | ')) : null,
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', disabled: running, onclick: () => act('run' + (st.state === 'new' ? '' : '?rerun=true')) }, st.state === 'new' ? 'Run' : 'Run again'),
+      h('button', { disabled: !running, onclick: () => act('stop') }, 'Stop'),
+      h('button', { disabled: running, onclick: () => confirm('Wipe this experiment\'s wiki, database and results? The config stays.') && act('reset') }, 'Reset'),
+      h('button', { onclick: doClone }, 'Clone…'),
+      h('button', { class: 'danger', disabled: running, onclick: doDelete }, 'Delete')));
+}
+
+async function act(path) {
+  try { await api(`/api/experiments/${S.id}/${path}`, 'POST'); S.note = ''; S.err = false; } catch (e) { S.note = e.message; S.err = true; }
+  await refresh(false); await loadList();
+}
+async function doClone() {
+  const name = prompt('Name for the clone:', S.d.config.name + ' (copy)'); if (!name) return;
+  const raw = prompt('Settings to change, KEY=VALUE separated by commas (blank = none):', '') || '';
+  try {
+    const env = Object.fromEntries(raw.split(',').map(s => s.trim()).filter(Boolean).map(s => { const i = s.indexOf('='); return [s.slice(0, i).trim().toUpperCase(), s.slice(i + 1).trim()]; }));
+    const r = await api(`/api/experiments/${S.id}/clone`, 'POST', { name, env });
+    await loadList(); select(r.id);
+  } catch (e) { S.note = e.message; S.err = true; renderTop(); }
+}
+async function doDelete() {
+  if (!confirm('Delete ' + S.id + ' permanently?')) return;
+  await api('/api/experiments/' + S.id, 'DELETE'); S.id = null; S.d = null; clearInterval(poll);
+  $('#top').replaceChildren(h('div', { class: 'empty' }, 'Deleted.')); $('#bar').hidden = $('#work').hidden = true; loadList();
+}
+
+function renderBar() {
+  const bar = $('#bar'), work = $('#work'); bar.replaceChildren();
+  const chs = S.d ? S.d.channels : [];
+  bar.hidden = work.hidden = !chs.length;
+  if (!chs.length) return;
+  for (const c of chs) bar.append(h('button', { class: 'tab' + (c.jid === S.jid ? ' sel' : ''), onclick: async () => { S.jid = c.jid; S.focus = null; await loadStreams(); renderAll(); } }, `${c.title} (${c.messages})`));
+  bar.append(h('span', { class: 'sp' }));
+  const sel = h('select', { 'aria-label': 'Compare with', onchange: async e => { S.cmp = e.target.value; S.focus = null; await loadStreams(); renderAll(); } },
+    h('option', { value: '' }, 'Compare with…'), S.exps.filter(e => e.id !== S.id).map(e => h('option', { value: e.id, selected: e.id === S.cmp }, `${e.id} ${e.name}`)));
+  bar.append(sel, h('label', {}, h('input', { type: 'checkbox', checked: S.hideChatter, onchange: e => { S.hideChatter = e.target.checked; renderTranscript(); } }), 'Hide unassigned'));
+}
+
+const colorOf = threads => new Map(threads.map((t, i) => [t.slug, hue(i)]));
+const fmtTz = () => (S.d && S.d.config.timezone) || 'Asia/Kolkata';
+const fmtDay = iso => new Date(iso).toLocaleDateString('en-IN', { timeZone: fmtTz(), weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const fmtTime = iso => new Date(iso).toLocaleTimeString('en-IN', { timeZone: fmtTz(), hour: '2-digit', minute: '2-digit' });
+
+function renderTranscript() {
+  const root = $('#transcript'); root.replaceChildren();
+  const A = S.a, B = S.b;
+  if (!A || !A.messages.length) { root.append(h('div', { class: 'empty' }, S.d && ['running', 'queued'].includes(S.d.status.state) ? 'Waiting for messages to load…' : 'No messages yet. Run the experiment.')); return; }
+  const ca = colorOf(A.threads), cb = B ? colorOf(B.threads) : null;
+  const ta = new Map(A.threads.map(t => [t.slug, t])), tb = B ? new Map(B.threads.map(t => [t.slug, t])) : null;
+  const bm = B ? new Map(B.messages.map(m => [m.id, m])) : null;
+  let pa = null, pb = null, day = null;
+  const msgs = A.messages.filter(m => !(S.hideChatter && !m.thread && !(bm && bm.get(m.id) && bm.get(m.id).thread)));
+  msgs.forEach((m, i) => {
+    const mb = bm ? bm.get(m.id) : null, sb = mb ? mb.thread : null;
+    const d = m.t ? fmtDay(m.t) : ''; if (d !== day) { day = d; root.append(h('div', { class: 'day' }, d)); pa = pb = null; }
+    const next = msgs[i + 1], nextB = next && bm ? (bm.get(next.id) || {}).thread : null;
+    const dim = S.focus && ((S.focus.side === 'a' ? m.thread : sb) !== S.focus.slug);
+    const rail = (slug, prev, nxt, colors, side) => h('div', { class: 'rail' + (slug ? '' : ' none') + (slug && slug !== prev ? ' start' : '') + (slug && slug !== nxt ? ' end' : ''), style: slug ? `background:hsl(${colors.get(slug)} 55% var(--tl))` : '', title: slug || 'unassigned' });
+    const lab = (slug, prev, threads, colors, side, tag) => slug && slug !== prev
+      ? h('button', { class: 'lab', style: `--h:${colors.get(slug)}`, onclick: () => toggleFocus(side, slug) }, (tag ? tag + ': ' : '') + threads.get(slug).title) : null;
+    root.append(h('div', { class: 'row' + (dim ? ' dim' : '') },
+      rail(m.thread, pa, next && next.thread, ca, 'a'), B ? rail(sb, pb, nextB, cb, 'b') : null,
+      h('div', { class: 'body' }, lab(m.thread, pa, ta, ca, 'a', B ? 'A' : ''), B ? lab(sb, pb, tb, cb, 'b', 'B') : null,
+        h('div', {}, h('span', { class: 'who' }, m.who), h('span', { class: 't' }, m.t ? fmtTime(m.t) : '')),
+        m.text ? h('div', { class: 'txt' }, m.text) : h('div', { class: 'media' }, `[${m.media || 'empty'}]`))));
+    pa = m.thread; pb = sb;
+  });
+}
+
+function toggleFocus(side, slug) {
+  S.focus = S.focus && S.focus.side === side && S.focus.slug === slug ? null : { side, slug };
+  renderTranscript(); renderThreads();
+}
+
+function renderThreads() {
+  const root = $('#threads'); root.replaceChildren();
+  const block = (title, st, expId, side) => {
+    if (!st) return;
+    const colors = colorOf(st.threads);
+    root.append(h('h3', {}, `${title}: ${st.threads.length} threads · ${st.unassigned} messages in none`));
+    if (!st.threads.length) root.append(h('div', { class: 'empty' }, 'No threads.'));
+    for (const t of st.threads)
+      root.append(h('div', { class: 'card' + (S.focus && S.focus.side === side && S.focus.slug === t.slug ? ' sel' : ''), style: `--h:${colors.get(t.slug)}`, tabindex: 0, onclick: () => toggleFocus(side, t.slug), onkeydown: e => e.key === 'Enter' && toggleFocus(side, t.slug) },
+        h('h4', {}, t.title), h('div', { class: 'n' }, `${t.messages} messages · ${t.state}${t.archived ? ' · archived' : ''} · ${t.participants.length} people`),
+        t.summary ? h('p', {}, t.summary) : null,
+        h('button', { onclick: e => { e.stopPropagation(); openPage(expId, t); } }, 'Open page')));
+  };
+  block(S.cmp ? 'A' : 'Threads', S.a, S.id, 'a');
+  if (S.b) block('B (' + S.cmp + ')', S.b, S.cmp, 'b');
+  const inbox = S.d ? Object.entries(S.d.inbox || {}) : [];
+  if (inbox.length) { root.append(h('h3', {}, 'Agent inboxes')); for (const [agent, items] of inbox) root.append(h('div', { class: 'n' }, `${agent}: ${items.length} pending`)); }
+  if (S.d && S.d.wakes.length) root.append(h('div', { class: 'n' }, `Wake-ups: ${[...new Set(S.d.wakes.map(w => w.agent))].join(', ')}`));
+}
+
+async function openPage(expId, t) {
+  $('#pageTitle').textContent = t.title;
+  $('#page').textContent = 'Loading…'; $('#dlgPage').showModal();
+  try { $('#page').textContent = await api(`/api/experiments/${expId}/page?path=${encodeURIComponent(t.path)}`); } catch (e) { $('#page').textContent = e.message; }
+}
+
+document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); b.closest('dialog').close(); }));
+$('#new').addEventListener('click', () => { $('#newErr').textContent = ''; $('#dlgNew').showModal(); });
+$('#fNew').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = new FormData($('#fNew'));
+  const env = Object.fromEntries(String(f.get('env') || '').split('\n').map(s => s.trim()).filter(Boolean).map(s => { const i = s.indexOf('='); return [s.slice(0, i).trim().toUpperCase(), s.slice(i + 1).trim()]; }));
+  const groups = String(f.get('groups') || '').split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    const r = await api('/api/experiments', 'POST', { name: f.get('name'), data_dir: f.get('data_dir'), groups: groups.length ? groups : null, date_from: f.get('date_from'), date_to: f.get('date_to'), env, cache: !f.get('nocache') });
+    $('#fNew').reset(); $('#dlgNew').close(); await loadList(); select(r.id);
+  } catch (err) { $('#newErr').textContent = err.message; }
+});
+loadList();
+</script>
+</body>
+</html>

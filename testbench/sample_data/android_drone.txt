@@ -1,0 +1,13 @@
+12/10/2025, 09:01 - Messages and calls are end-to-end encrypted. No one outside of this chat, not even WhatsApp, can read or listen to them.
+12/10/2025, 09:01 - Aman created group "Drone Project"
+13/10/2025, 10:15 - Aman Sharma: Team, flight controller board arrived
+Who is testing the PID tuning tomorrow?
+13/10/2025, 10:16 - Riya: I can do it after 4pm
+13/10/2025, 10:16 - Riya: ok
+13/10/2025, 10:16 - Riya: ok
+13/10/2025, 10:20 - +91 98765 43210: need the budget sheet for motors
+13/10/2025, 10:21 - Aman Sharma: <Media omitted>
+14/10/2025, 18:30 - You: Uploaded the tuning notes <This message was edited>
+14/10/2025, 18:31 - Riya: This message was deleted
+14/10/2025, 18:32 - Aman Sharma added Karan
+15/10/2025, 11:00 - Karan: Sharing the ESC datasheet, please review before Friday

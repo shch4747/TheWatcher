@@ -1,0 +1,4 @@
+title,kind,initiative,lead,brief,enabled
+Drone Project,project,Autonomous Drone,Aman Sharma,Build a quadcopter with PID flight control,true
+Coordis,coordis,,,,true
+Old Event,event,Old Fest,Riya Verma,,false
